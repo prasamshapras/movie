@@ -1,0 +1,127 @@
+/* assets/css/pages.css */
+
+.page-hero {
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+    padding: var(--spacing-3xl) 0;
+    color: white;
+    text-align: center;
+    margin-bottom: var(--spacing-2xl);
+    border-radius: var(--radius-2xl);
+}
+
+.page-hero h1 {
+    font-size: var(--font-size-4xl);
+    font-weight: 800;
+    margin-bottom: var(--spacing-sm);
+    letter-spacing: -0.025em;
+}
+
+.page-hero p {
+    color: var(--gray-400);
+    font-size: var(--font-size-lg);
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.page-content {
+    background: white;
+    padding: var(--spacing-2xl);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-lg);
+    margin-bottom: var(--spacing-3xl);
+}
+
+.section-title {
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    color: var(--gray-900);
+    margin-bottom: var(--spacing-lg);
+    padding-bottom: var(--spacing-sm);
+    border-bottom: 2px solid var(--primary-100);
+}
+
+.content-block {
+    margin-bottom: var(--spacing-xl);
+}
+
+.content-block h3 {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    color: var(--gray-800);
+    margin-bottom: var(--spacing-md);
+}
+
+.content-block p {
+    color: var(--gray-600);
+    line-height: 1.8;
+}
+
+/* FAQ Styles */
+.faq-item {
+    margin-bottom: var(--spacing-lg);
+    padding: var(--spacing-lg);
+    background: var(--gray-50);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--gray-200);
+}
+
+.faq-question {
+    font-weight: 700;
+    color: var(--gray-900);
+    margin-bottom: var(--spacing-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.faq-question svg {
+    color: var(--primary-600);
+}
+
+.faq-answer {
+    color: var(--gray-600);
+    font-size: var(--font-size-sm);
+}
+
+/* Contact Page Styles */
+.contact-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.5fr;
+    gap: var(--spacing-2xl);
+}
+
+.contact-info-card {
+    background: var(--primary-50);
+    padding: var(--spacing-xl);
+    border-radius: var(--radius-xl);
+}
+
+.contact-method {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+}
+
+.contact-icon {
+    width: 48px;
+    height: 48px;
+    background: white;
+    color: var(--primary-600);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-sm);
+}
+
+.contact-form {
+    display: grid;
+    gap: var(--spacing-lg);
+}
+
+@media (max-width: 768px) {
+    .contact-grid {
+        grid-template-columns: 1fr;
+    }
+}

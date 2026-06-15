@@ -20,10 +20,10 @@
                             <a href="<?= BASE_URL ?>/index.php" style="color: var(--gray-400); text-decoration: none;">Movies</a>
                         </li>
                         <li style="margin-bottom: var(--spacing-sm);">
-                            <a href="<?= BASE_URL ?>/about.php" style="color: var(--gray-400); text-decoration: none;">About Us</a>
+                            <a href="<?= BASE_URL ?>/pages/about.php" style="color: var(--gray-400); text-decoration: none;">About Us</a>
                         </li>
                         <li style="margin-bottom: var(--spacing-sm);">
-                            <a href="<?= BASE_URL ?>/contact.php" style="color: var(--gray-400); text-decoration: none;">Contact</a>
+                            <a href="<?= BASE_URL ?>/pages/contact.php" style="color: var(--gray-400); text-decoration: none;">Contact</a>
                         </li>
                     </ul>
                 </div>
@@ -32,13 +32,13 @@
                     <h4 style="color: white; margin-bottom: var(--spacing-md);">Support</h4>
                     <ul style="list-style: none; padding: 0;">
                         <li style="margin-bottom: var(--spacing-sm);">
-                            <a href="<?= BASE_URL ?>/faq.php" style="color: var(--gray-400); text-decoration: none;">FAQ</a>
+                            <a href="<?= BASE_URL ?>/pages/faq.php" style="color: var(--gray-400); text-decoration: none;">FAQ</a>
                         </li>
                         <li style="margin-bottom: var(--spacing-sm);">
-                            <a href="<?= BASE_URL ?>/terms.php" style="color: var(--gray-400); text-decoration: none;">Terms of Service</a>
+                            <a href="<?= BASE_URL ?>/pages/terms.php" style="color: var(--gray-400); text-decoration: none;">Terms of Service</a>
                         </li>
                         <li style="margin-bottom: var(--spacing-sm);">
-                            <a href="<?= BASE_URL ?>/privacy.php" style="color: var(--gray-400); text-decoration: none;">Privacy Policy</a>
+                            <a href="<?= BASE_URL ?>/pages/privacy.php" style="color: var(--gray-400); text-decoration: none;">Privacy Policy</a>
                         </li>
                     </ul>
                 </div>

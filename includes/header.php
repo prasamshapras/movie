@@ -9,6 +9,7 @@
     <meta name="description" content="Book movie tickets online - Ticketly">
     <title><?= $page_title ?? 'Ticketly' ?> - Movie Ticket Booking</title>
     <link rel="stylesheet" href="<?= BASE_URL ?>/assets/css/styles.css">
+    <link rel="stylesheet" href="<?= BASE_URL ?>/assets/css/pages.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&display=swap" rel="stylesheet">

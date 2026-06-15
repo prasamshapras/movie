@@ -1,9 +1,14 @@
 <?php
-$page_title = 'Add Movie';
-require_once 'includes/admin_header.php';
+require_once '../includes/config.php';
+require_once '../includes/functions.php';
 
-$err='';
-if($_SERVER['REQUEST_METHOD']=='POST'){
+if (!isAdminLoggedIn()) {
+    header('Location: ../login.php');
+    exit;
+}
+
+$err = '';
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $title = trim($_POST['title']);
     $desc = trim($_POST['description']);
     $genre = trim($_POST['genre']);
@@ -12,33 +17,37 @@ if($_SERVER['REQUEST_METHOD']=='POST'){
     $release_date = $_POST['release_date'] ?: null;
     $poster = '';
 
-    if(isset($_FILES['poster_file']) && $_FILES['poster_file']['error'] == 0){
-        $allowed = ['jpg','jpeg','png','gif','webp'];
-        $ext = strtolower(pathinfo($_FILES['poster']['name'], PATHINFO_EXTENSION));
-        if(!in_array($ext, $allowed)){
+    if (isset($_FILES['poster_file']) && $_FILES['poster_file']['error'] == 0) {
+        $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        $ext = strtolower(pathinfo($_FILES['poster_file']['name'], PATHINFO_EXTENSION));
+        if (!in_array($ext, $allowed)) {
             $err = "Invalid file type. Only JPG, PNG, GIF, WEBP allowed.";
         } else {
-            if(!is_dir('../assets/uploads')) mkdir('../assets/uploads', 0755, true);
+            if (!is_dir('../assets/uploads')) mkdir('../assets/uploads', 0755, true);
             $poster = 'assets/uploads/' . time() . '_' . basename($_FILES['poster_file']['name']);
             $poster = str_replace('\\', '/', $poster);
-            $poster = ltrim($poster, '/'); 
+            $poster = ltrim($poster, '/');
             move_uploaded_file($_FILES['poster_file']['tmp_name'], '../' . $poster);
         }
     } else {
         $err = 'Poster image is required.';
     }
 
-    if(!$title) $err = 'Title is required';
-    else if(!$poster) $err = 'Poster is required';
-    else {
-        $ins = $pdo->prepare("INSERT INTO movies (title,description,genre,language,duration,poster,release_date) VALUES (?,?,?,?,?,?,?)");
-        $ins->execute([$title,$desc,$genre,$language,$duration,$poster,$release_date]);
-        header('Location: movies.php'); exit;
+    if (!$title && !$err) $err = 'Title is required';
+    
+    if (!$err) {
+        $ins = $pdo->prepare("INSERT INTO movies (title, description, genre, language, duration, poster, release_date) VALUES (?,?,?,?,?,?,?)");
+        $ins->execute([$title, $desc, $genre, $language, $duration, $poster, $release_date]);
+        header('Location: movies.php');
+        exit;
     }
 }
+
+$page_title = 'Add Movie';
+require_once 'includes/admin_header.php';
 ?>
 
-<?php if($err): ?>
+<?php if ($err): ?>
     <div class="alert alert-error" style="padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem; background: #fee2e2; color: #991b1b; border-left: 4px solid #ef4444;">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>

@@ -52,7 +52,7 @@ $transaction_uuid = "TXN" . $booking_id . time();
 $signature = generateEsewaSignature($totalAmount, $transaction_uuid);
 
 $success_url = BASE_URL . "/success.php?booking_id=" . $booking_id . "&transaction_uuid=" . urlencode($transaction_uuid);
-$failure_url = BASE_URL . "/failure.php?booking_id=" . $booking_id;
+$failure_url = BASE_URL . "/failure.php?booking_id=" . $booking_id . "&movie_id=" . $booking['movie_id'] . "&showtime_id=" . $booking['showtime_id'];
 
 $local_success_url = "success.php?booking_id=" . $booking_id . "&transaction_uuid=LOCALTEST" . time();
 

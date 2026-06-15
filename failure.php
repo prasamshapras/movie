@@ -78,18 +78,19 @@ try {
 
     $pdo->commit();
 
-} catch (Exception $e) {
+    } catch (Exception $e) {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
 
     die('Cancel failed: ' . $e->getMessage());
-}
+    }
 
-header(
-    "Location: payment/checkout.php?id=" .
+    // Redirect back to the movie selection/seat selection page
+    header(
+    "Location: movie.php?id=" .
     $mainBooking['movie_id'] .
     "&showtime=" .
     $mainBooking['showtime_id']
-);
-exit;
+    );
+    exit;
