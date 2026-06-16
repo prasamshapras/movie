@@ -3,6 +3,11 @@ require_once 'includes/config.php';
 require_once 'includes/functions.php';
 require_once 'includes/recommendation.php';
 
+// Store the current URL for redirection after login if the user is not logged in
+if (!isLoggedIn()) {
+    $_SESSION['redirect_after_login'] = $_SERVER['REQUEST_URI'];
+}
+
 $movie_id = intval($_GET['id'] ?? 0);
 $showtime_id = intval($_GET['showtime'] ?? 0);
 

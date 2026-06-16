@@ -54,6 +54,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
 
+        // If a redirect URL is saved in session (e.g. from movie/seat selection)
+        if (isset($_SESSION['redirect_after_login'])) {
+            $redir = $_SESSION['redirect_after_login'];
+            unset($_SESSION['redirect_after_login']);
+            unset($_SESSION['after_login_redirect']); // Clear generic redirect if it exists
+            header('Location: ' . $redir);
+            exit;
+        }
+
         $redir = $_SESSION['after_login_redirect'] ?? 'dashboard.php';
         unset($_SESSION['after_login_redirect']);
 
