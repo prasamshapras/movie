@@ -10,12 +10,13 @@
  */
 
 /**
- * Tokenize movie features for content comparison
+ * Tokenize movie features for content comparison (AI/ML NLP preprocessing)
  */
 function movieTokens($movie) {
     $tokens = [];
+    $stopWords = ['the', 'is', 'in', 'and', 'to', 'a', 'of', 'it', 'for', 'with', 'on', 'at', 'by', 'an', 'be', 'this', 'that', 'from', 'as', 'are', 'was', 'were', 'will', 'can', 'his', 'her', 'their', 'they', 'he', 'she', 'who', 'whom', 'whose'];
 
-    // Genre tokens
+    // 1. Genre tokens (High weight)
     $genres = explode(',', strtolower($movie['genre'] ?? ''));
     foreach ($genres as $g) {
         $g = trim($g);
@@ -24,10 +25,24 @@ function movieTokens($movie) {
         }
     }
 
-    // Language tokens
+    // 2. Language tokens
     $language = strtolower(trim($movie['language'] ?? ''));
     if ($language !== '') {
         $tokens[] = 'language_' . $language;
+    }
+
+    // 3. Description Keywords (AI NLP extraction)
+    $desc = strtolower($movie['description'] ?? '');
+    // Clean string: remove punctuation and non-alphanumeric characters
+    $desc = preg_replace('/[^\w\s]/', '', $desc);
+    $words = explode(' ', $desc);
+    
+    foreach ($words as $word) {
+        $word = trim($word);
+        // Minimum length 3 and not a stop word
+        if (strlen($word) > 2 && !in_array($word, $stopWords)) {
+            $tokens[] = 'term_' . $word;
+        }
     }
 
     return $tokens;
@@ -162,11 +177,15 @@ function getCollaborativeScores($pdo) {
 }
 
 /**
- * Main Hybrid Recommendation Engine
+ * Main Hybrid Recommendation Engine (Improved with AI/ML concepts)
  */
 function getRecommendedMovies($pdo, $customer_id = null, $limit = 4, $context = []) {
-    $allMovies = $pdo->query("SELECT * FROM movies")->fetchAll();
+    // 1. Data Retrieval - Only released movies
+    $allMovies = $pdo->query("SELECT * FROM movies WHERE release_date IS NOT NULL AND release_date <= CURDATE()")->fetchAll();
     
+    if (empty($allMovies)) return [];
+
+    // 2. Feature Extraction (Personal Profile)
     $userVector = [];
     $bookedMovieIds = [];
     if ($customer_id) {
@@ -174,37 +193,39 @@ function getRecommendedMovies($pdo, $customer_id = null, $limit = 4, $context = 
         $bookedMovieIds = getBookedMovieIds($pdo, $customer_id);
     }
     
+    // 3. Collaborative & Demographic Data
     $knnScores = $customer_id ? getKnnScores($pdo, $customer_id) : [];
     $collabScores = getCollaborativeScores($pdo);
     
-    // Normalize Collab scores to 0-1
+    // Global Popularity Normalization
     $maxCollab = !empty($collabScores) ? max($collabScores) : 1;
 
+    // 4. Contextual Features
     $currentTime = $context['time'] ?? date('H:i:s');
     $hour = (int)date('H', strtotime($currentTime));
     $viewingMovieId = $context['movie_id'] ?? null;
     
     $recommended = [];
+    $now = time();
 
     foreach ($allMovies as $movie) {
         $mid = $movie['movie_id'];
 
-        // Exclude already booked movies
+        // Filter: Exclude already booked movies
         if (in_array($mid, $bookedMovieIds)) continue;
         
-        // If "You Might Also Like" context, exclude the current movie
+        // Filter: If "You Might Also Like" context, exclude the current movie
         if ($viewingMovieId && $mid == $viewingMovieId) continue;
 
-        $movieVector = [];
-        foreach (movieTokens($movie) as $token) {
-            $movieVector[$token] = 1;
-        }
+        // --- ML SCORING COMPONENTS ---
 
-        // 1. Cosine Similarity (Content-Based) - 50%
-        // If viewing a movie, compare with that movie. Otherwise, compare with user profile.
+        // A. Content Similarity (Cosine Similarity) - 40%
         $cosineScore = 0;
+        $movieVector = [];
+        foreach (movieTokens($movie) as $token) $movieVector[$token] = 1;
+
         if ($viewingMovieId) {
-            $stmt = $pdo->prepare("SELECT * FROM movies WHERE movie_id = ?");
+            $stmt = $pdo->prepare("SELECT * FROM movies WHERE movie_id = ? AND release_date <= CURDATE()");
             $stmt->execute([$viewingMovieId]);
             $viewingMovie = $stmt->fetch();
             if ($viewingMovie) {
@@ -216,51 +237,46 @@ function getRecommendedMovies($pdo, $customer_id = null, $limit = 4, $context = 
             $cosineScore = cosineSimilarity($userVector, $movieVector);
         }
 
-        // 2. Collaborative Filtering (User History/Popularity) - 20%
+        // B. Collaborative Filtering (Popularity) - 20%
         $collabScore = ($collabScores[$mid] ?? 0) / $maxCollab;
 
-        // 3. KNN Demographic Score - 15%
+        // C. Trending Score (Popularity + Decay) - 15%
+        // Newer movies that are getting popular get higher scores
+        $releaseDateTs = strtotime($movie['release_date']);
+        $daysSinceRelease = max(1, ($now - $releaseDateTs) / (60 * 60 * 24));
+        $decay = exp(-0.01 * $daysSinceRelease); // Exponential decay factor
+        $trendingScore = $collabScore * $decay;
+
+        // D. KNN Demographic Matching - 15%
         $knnScore = 0;
         if (!empty($knnScores)) {
             $maxKnn = max($knnScores);
             $knnScore = ($knnScores[$mid] ?? 0) / ($maxKnn ?: 1);
         }
 
-        // 4. Contextual Score (Time of Day) - 15%
+        // E. Contextual Awareness (Time of Day) - 10%
         $contextScore = 0;
         $genre = strtolower($movie['genre']);
-        
-        if ($hour >= 18 || $hour < 6) { // Evening/Night (6 PM - 6 AM)
-            $nightGenres = ['horror', 'thriller', 'scary', 'suspense', 'action'];
-            foreach ($nightGenres as $ng) {
-                if (stripos($genre, $ng) !== false) {
-                    $contextScore = 1;
-                    break;
-                }
-            }
-        } else { // Morning/Day (6 AM - 6 PM)
-            $dayGenres = ['comedy', 'romance', 'romantic', 'family', 'animation', 'drama'];
-            foreach ($dayGenres as $dg) {
-                if (stripos($genre, $dg) !== false) {
-                    $contextScore = 1;
-                    break;
-                }
-            }
+        if (($hour >= 18 || $hour < 6) && preg_match('/horror|thriller|mystery|action/', $genre)) {
+            $contextScore = 1;
+        } elseif (($hour >= 6 && $hour < 18) && preg_match('/comedy|romance|family|animation|drama/', $genre)) {
+            $contextScore = 1;
         }
 
-        // Final Hybrid Calculation
-        $finalScore = ($cosineScore * 0.50) + 
-                      ($collabScore * 0.20) + 
-                      ($knnScore * 0.15) + 
-                      ($contextScore * 0.15);
+        // --- FINAL HYBRID WEIGHTED SCORE ---
+        $finalScore = ($cosineScore   * 0.40) + 
+                      ($collabScore   * 0.20) + 
+                      ($trendingScore * 0.15) + 
+                      ($knnScore      * 0.15) + 
+                      ($contextScore  * 0.10);
 
-        $movie['recommendation_score'] = $finalScore;
+        $movie['ai_score'] = $finalScore;
         $recommended[] = $movie;
     }
 
-    // Sort by score descending
+    // Sort by AI score descending
     usort($recommended, function($a, $b) {
-        return $b['recommendation_score'] <=> $a['recommendation_score'];
+        return $b['ai_score'] <=> $a['ai_score'];
     });
 
     return array_slice($recommended, 0, $limit);

@@ -1,6 +1,12 @@
 <?php
 require_once '../includes/config.php';
 
+if (isAdminLoggedIn()) {
+    $_SESSION['error'] = "Admin cannot book tickets. Please use a customer account.";
+    header("Location: ../admin/dashboard.php");
+    exit;
+}
+
 $customer_id = currentUserId();
 
 $movie_id = intval($_GET['id'] ?? 0);

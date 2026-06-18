@@ -4,6 +4,12 @@ require_once 'includes/functions.php';
 
 if(!isLoggedIn()) header('Location: login.php');
 
+if (isAdminLoggedIn()) {
+    $_SESSION['error'] = "Admin cannot access customer dashboard. Please use a customer account.";
+    header("Location: admin/dashboard.php");
+    exit;
+}
+
 $uid = currentUserId();
 $res = $pdo->prepare("SELECT b.*, m.title, m.poster, s.show_date, s.show_time, s.screen 
                       FROM bookings b 

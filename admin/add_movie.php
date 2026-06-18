@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $genre = trim($_POST['genre']);
     $language = trim($_POST['language']);
     $duration = intval($_POST['duration']);
-    $release_date = $_POST['release_date'] ?: null;
+    $release_date = $_POST['release_date'] ?: null; // Proper YYYY-MM-DD from HTML5 date input
     $poster = '';
 
     if (isset($_FILES['poster_file']) && $_FILES['poster_file']['error'] == 0) {
@@ -34,8 +34,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     }
 
     if (!$title && !$err) $err = 'Title is required';
+    if (!$release_date && !$err) $err = 'Release date is required for automatic Now Showing/Upcoming logic';
     
     if (!$err) {
+        // SQL insertion uses standard DATE format
         $ins = $pdo->prepare("INSERT INTO movies (title, description, genre, language, duration, poster, release_date) VALUES (?,?,?,?,?,?,?)");
         $ins->execute([$title, $desc, $genre, $language, $duration, $poster, $release_date]);
         header('Location: movies.php');
@@ -83,8 +85,8 @@ require_once 'includes/admin_header.php';
                     <input type="number" name="duration" class="form-input" style="width: 100%; padding: 0.625rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; font-size: 0.875rem;" min="1" max="300">
                 </div>
                 <div class="form-group" style="margin-bottom: 1.5rem;">
-                    <label class="form-label" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #475569; font-size: 0.875rem;">Release Date</label>
-                    <input type="date" name="release_date" class="form-input" style="width: 100%; padding: 0.625rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; font-size: 0.875rem;">
+                    <label class="form-label" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #475569; font-size: 0.875rem;">Release Date *</label>
+                    <input type="date" name="release_date" class="form-input" style="width: 100%; padding: 0.625rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; font-size: 0.875rem;" required>
                 </div>
                 <div class="form-group" style="margin-bottom: 1.5rem;">
                     <label class="form-label" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #475569; font-size: 0.875rem;">Poster Image *</label>

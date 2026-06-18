@@ -13,8 +13,11 @@ $limit = 8;
 $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
 $offset = ($page - 1) * $limit;
 
-// Base query for counting total results
-$countQuery = "SELECT COUNT(*) FROM movies m WHERE 1=1";
+$isSearching = !empty($search) || !empty($filter_genre) || !empty($filter_language);
+
+// 1. Logic for Now Showing / Search Results
+// Strictly show movies released today or in the past.
+$countQuery = "SELECT COUNT(*) FROM movies m WHERE m.release_date IS NOT NULL AND m.release_date <= CURDATE()";
 $params = [];
 
 if (!empty($search)) {
@@ -38,10 +41,26 @@ $stmtCount->execute($params);
 $totalResults = $stmtCount->fetchColumn();
 $totalPages = ceil($totalResults / $limit);
 
-// Build main query with filters and pagination
+// Build main query for Now Showing
+// AI Improvement: Added Relevance Score (Title matches are 3x more important than Description)
+// Using strict continuous substring matching with LIKE
+$relevanceSql = "";
+$searchParams = [];
+if (!empty($search)) {
+    $relevanceSql = ", (
+        (CASE WHEN m.title LIKE ? THEN 3 ELSE 0 END) + 
+        (CASE WHEN m.description LIKE ? THEN 1 ELSE 0 END)
+    ) AS relevance_score";
+    $searchParams = ["%$search%", "%$search%"];
+} else {
+    $relevanceSql = ", 0 AS relevance_score";
+}
+
 $query = "SELECT m.*, 
           (SELECT COUNT(*) FROM showtimes s WHERE s.movie_id = m.movie_id AND s.show_date >= CURDATE()) as upcoming_showtimes
-          FROM movies m WHERE 1=1";
+          $relevanceSql
+          FROM movies m 
+          WHERE m.release_date <= CURDATE()";
 
 if (!empty($search)) {
     $query .= " AND (m.title LIKE ? OR m.description LIKE ?)";
@@ -55,11 +74,28 @@ if (!empty($filter_language)) {
     $query .= " AND m.language = ?";
 }
 
-$query .= " ORDER BY m.created_at DESC LIMIT $limit OFFSET $offset";
+// Order Logic: Search results use Relevance Score, otherwise use Release Date
+if (!empty($search)) {
+    $query .= " ORDER BY relevance_score DESC, m.release_date DESC LIMIT $limit OFFSET $offset";
+} else {
+    $query .= " ORDER BY m.release_date DESC LIMIT $limit OFFSET $offset";
+}
 
 $stmt = $pdo->prepare($query);
-$stmt->execute($params);
+// Combine searchParams for relevance calculation and the regular params for filtering
+$finalParams = array_merge($searchParams, $params);
+$stmt->execute($finalParams);
 $moviesRaw = $stmt->fetchAll();
+
+// 2. Logic for Upcoming Shows (only on home page first page, and only if not searching)
+$upcomingMovies = [];
+if (!$isSearching && $page == 1) {
+    $stmtUp = $pdo->query("SELECT * FROM movies m 
+                           WHERE m.release_date IS NOT NULL AND m.release_date > CURDATE() 
+                           ORDER BY m.release_date ASC 
+                           LIMIT 3");
+    $upcomingMovies = $stmtUp->fetchAll();
+}
 
 // Get unique genres and languages for filters
 $allGenresRaw = $pdo->query("SELECT DISTINCT genre FROM movies WHERE genre IS NOT NULL AND genre != ''")->fetchAll();
@@ -77,10 +113,128 @@ sort($uniqueGenres);
 
 $recommendedMovies = getRecommendedMovies($pdo, currentUserId(), 4, ['time' => date('H:i:s')]);
 
+// Function to render movie sections
+$renderMovies = function($movies, $title, $isRec = false, $isUpcomingSection = false) {
+    if (empty($movies)) return '';
+    $today = date('Y-m-d');
+    ob_start();
+    ?>
+    <section id="<?= $isRec ? 'recommended' : ($isUpcomingSection ? 'upcoming' : 'movies') ?>" style="margin-bottom: var(--spacing-3xl);">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: var(--spacing-xl);">
+            <h2><?= $title ?></h2>
+            <?php if ($isRec): ?>
+                <span style="color: var(--primary-600); font-size: var(--font-size-sm); font-weight: 600;">
+                    <?= isLoggedIn() ? 'Based on your preferences' : 'Curated for this time of day' ?>
+                </span>
+            <?php endif; ?>
+        </div>
+        <div class="movie-grid">
+            <?php foreach ($movies as $movie): ?>
+                <?php $isUpcoming = ($movie['release_date'] > $today); ?>
+                <div class="movie-card">
+                    <div class="movie-poster-wrapper">
+                        <img src="<?= getMoviePoster($movie['poster']) ?>" class="movie-poster" alt="<?= htmlspecialchars($movie['title']) ?>">
+                        <?php if ($isUpcoming): ?>
+                            <div style="position: absolute; top: var(--spacing-md); right: var(--spacing-md); background: var(--warning); color: white; padding: 0.25rem 0.75rem; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 600;">Coming Soon</div>
+                        <?php endif; ?>
+                    </div>
+                    <div class="movie-info">
+                        <h3 class="movie-title"><?= htmlspecialchars($movie['title']) ?></h3>
+                        <div class="movie-meta">
+                            <?php 
+                            $genres = explode(',', $movie['genre']);
+                            $limit = $isRec ? 2 : count($genres);
+                            foreach(array_slice($genres, 0, $limit) as $genre): ?>
+                                <span class="badge"><?= htmlspecialchars(trim($genre)) ?></span>
+                            <?php endforeach; ?>
+                            <span class="badge"><?= htmlspecialchars($movie['language']) ?></span>
+                        </div>
+                        <div class="movie-details">
+                            <span><?= $movie['duration'] ?> min</span>
+                            <span>•</span>
+                            <span><?= date('M d, Y', strtotime($movie['release_date'])) ?></span>
+                        </div>
+
+                        <?php if ($isUpcomingSection || $isUpcoming): ?>
+                            <p style="font-size: 0.875rem; color: var(--gray-500); margin-top: 0.75rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; height: 2.5rem;">
+                                <?= htmlspecialchars($movie['description']) ?>
+                            </p>
+                            <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--gray-100);">
+                                <a href="movie.php?id=<?= $movie['movie_id'] ?>" class="btn btn-outline" style="width: 100%; justify-content: center;">Movie Info</a>
+                            </div>
+                        <?php else: ?>
+                            <div class="movie-price">
+                                <span class="price">From NPR 250</span>
+                                <a href="movie.php?id=<?= $movie['movie_id'] ?>" class="btn btn-primary" style="<?= $isRec ? 'padding: 0.5rem 1rem;' : '' ?>">Book Now</a>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </section>
+    <?php
+    return ob_get_clean();
+};
+
+function renderPagination($currentPage, $totalPages, $search, $genre, $language) {
+    if ($totalPages <= 1) return;
+    
+    $queryParams = [];
+    if ($search) $queryParams['search'] = $search;
+    if ($genre) $queryParams['genre'] = $genre;
+    if ($language) $queryParams['language'] = $language;
+    
+    $buildUrl = function($p) use ($queryParams) {
+        $params = $queryParams;
+        $params['page'] = $p;
+        return '?' . http_build_query($params);
+    };
+
+    echo '<div class="pagination" style="display: flex; justify-content: center; gap: 0.5rem; margin-top: -1rem; margin-bottom: var(--spacing-3xl);">';
+    
+    if ($currentPage > 1) {
+        echo '<a href="' . $buildUrl($currentPage - 1) . '" class="btn btn-outline" style="padding: 0.5rem 1rem;">&laquo; Previous</a>';
+    }
+
+    for ($i = 1; $i <= $totalPages; $i++) {
+        $activeStyle = ($i == $currentPage) ? 'background: var(--primary-600); color: white; border-color: var(--primary-600);' : '';
+        echo '<a href="' . $buildUrl($i) . '" class="btn btn-outline" style="padding: 0.5rem 1rem; ' . $activeStyle . '">' . $i . '</a>';
+    }
+
+    if ($currentPage < $totalPages) {
+        echo '<a href="' . $buildUrl($currentPage + 1) . '" class="btn btn-outline" style="padding: 0.5rem 1rem;">Next &raquo;</a>';
+    }
+
+    echo '</div>';
+}
+
+$allMoviesTitle = $isSearching ? "Search Results" : "Now Showing";
+$recTitle = isLoggedIn() ? 'Recommended For You' : 'Trending Now';
+
+$recHtml = $renderMovies($recommendedMovies, $recTitle, true);
+$allMoviesHtml = $renderMovies($moviesRaw, $allMoviesTitle, false);
+$upcomingHtml = $renderMovies($upcomingMovies, "Upcoming Shows", false, true);
+
+// AJAX response for live search
+if (isset($_GET['ajax'])) {
+    if ($isSearching) {
+        echo $allMoviesHtml;
+        renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
+        echo $recHtml;
+    } else {
+        echo $recHtml;
+        echo $allMoviesHtml;
+        if ($page == 1) echo $upcomingHtml;
+        renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
+    }
+    exit;
+}
+
 include 'includes/header.php';
 ?>
 
-<!-- Hero Section - Clean without stats -->
+<!-- Hero Section -->
 <section style="background: linear-gradient(135deg, var(--primary-600) 0%, var(--primary-800) 100%); padding: var(--spacing-3xl) 0; margin-bottom: var(--spacing-3xl);">
     <div class="container">
         <div style="max-width: 800px; margin: 0 auto; text-align: center;">
@@ -98,11 +252,11 @@ include 'includes/header.php';
             <form method="GET" style="display: grid; grid-template-columns: 1fr auto auto auto; gap: var(--spacing-md); align-items: flex-end;">
                 <div class="form-group" style="margin-bottom: 0;">
                     <label class="form-label">Search Movies</label>
-                    <input type="text" name="search" class="form-input" placeholder="Search by title or description..." value="<?= htmlspecialchars($search) ?>">
+                    <input type="text" name="search" id="searchInput" class="form-input" placeholder="Search by title or description..." value="<?= htmlspecialchars($search) ?>" autocomplete="off">
                 </div>
                 <div class="form-group" style="margin-bottom: 0;">
                     <label class="form-label">Genre</label>
-                    <select name="genre" class="form-select" style="min-width: 150px;">
+                    <select name="genre" id="genreFilter" class="form-select" style="min-width: 150px;">
                         <option value="">All Genres</option>
                         <?php foreach($uniqueGenres as $g): ?>
                             <option value="<?= htmlspecialchars($g) ?>" <?= $filter_genre == $g ? 'selected' : '' ?>><?= htmlspecialchars($g) ?></option>
@@ -111,7 +265,7 @@ include 'includes/header.php';
                 </div>
                 <div class="form-group" style="margin-bottom: 0;">
                     <label class="form-label">Language</label>
-                    <select name="language" class="form-select" style="min-width: 150px;">
+                    <select name="language" id="languageFilter" class="form-select" style="min-width: 150px;">
                         <option value="">All Languages</option>
                         <?php foreach($allLanguagesRaw as $l): ?>
                             <option value="<?= htmlspecialchars($l['language']) ?>" <?= $filter_language == $l['language'] ? 'selected' : '' ?>><?= htmlspecialchars($l['language']) ?></option>
@@ -123,7 +277,7 @@ include 'includes/header.php';
                     Search
                 </button>
             </form>
-            <?php if(!empty($search) || !empty($filter_genre) || !empty($filter_language)): ?>
+            <?php if($isSearching): ?>
                 <div style="margin-top: var(--spacing-md); font-size: var(--font-size-sm); color: var(--gray-500);">
                     Found <strong><?= $totalResults ?></strong> results. <a href="index.php" style="color: var(--primary-600); text-decoration: none; margin-left: 8px;">Clear all filters</a>
                 </div>
@@ -131,112 +285,20 @@ include 'includes/header.php';
         </div>
     </section>
 
-    <?php 
-    $isSearching = !empty($search) || !empty($filter_genre) || !empty($filter_language);
-    
-    // Function to render movie sections
-    $renderMovies = function($movies, $title, $showUpcomingBadge = false, $isRec = false) {
-        if (empty($movies)) return '';
-        ob_start();
+    <div id="movieResults">
+        <?php 
+        if ($isSearching) {
+            echo $allMoviesHtml;
+            renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
+            echo $recHtml;
+        } else {
+            echo $recHtml;
+            echo $allMoviesHtml;
+            if ($page == 1) echo $upcomingHtml;
+            renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
+        }
         ?>
-        <section id="<?= $isRec ? 'recommended' : 'movies' ?>" style="margin-bottom: var(--spacing-3xl);">
-            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: var(--spacing-xl);">
-                <h2><?= $title ?></h2>
-                <?php if ($isRec): ?>
-                    <span style="color: var(--primary-600); font-size: var(--font-size-sm); font-weight: 600;">
-                        <?= isLoggedIn() ? 'Based on your preferences' : 'Curated for this time of day' ?>
-                    </span>
-                <?php endif; ?>
-            </div>
-            <div class="movie-grid">
-                <?php foreach ($movies as $movie): ?>
-                    <div class="movie-card">
-                        <div class="movie-poster-wrapper">
-                            <img src="<?= getMoviePoster($movie['poster']) ?>" class="movie-poster" alt="<?= htmlspecialchars($movie['title']) ?>">
-                            <?php if ($showUpcomingBadge && $movie['upcoming_showtimes'] == 0): ?>
-                                <div style="position: absolute; top: var(--spacing-md); right: var(--spacing-md); background: var(--gray-900); color: white; padding: 0.25rem 0.75rem; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 600;">Coming Soon</div>
-                            <?php endif; ?>
-                        </div>
-                        <div class="movie-info">
-                            <h3 class="movie-title"><?= htmlspecialchars($movie['title']) ?></h3>
-                            <div class="movie-meta">
-                                <?php 
-                                $genres = explode(',', $movie['genre']);
-                                $limit = $isRec ? 2 : count($genres);
-                                foreach(array_slice($genres, 0, $limit) as $genre): ?>
-                                    <span class="badge"><?= htmlspecialchars(trim($genre)) ?></span>
-                                <?php endforeach; ?>
-                                <span class="badge"><?= htmlspecialchars($movie['language']) ?></span>
-                            </div>
-                            <div class="movie-details">
-                                <span><?= $movie['duration'] ?> min</span>
-                                <span>•</span>
-                                <span><?= date('M d, Y', strtotime($movie['release_date'])) ?></span>
-                            </div>
-                            <div class="movie-price">
-                                <span class="price">From NPR 250</span>
-                                <a href="movie.php?id=<?= $movie['movie_id'] ?>" class="btn btn-primary" style="<?= $isRec ? 'padding: 0.5rem 1rem;' : '' ?>">Book Now</a>
-                            </div>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-        </section>
-        <?php
-        return ob_get_clean();
-    };
-
-    $allMoviesTitle = $isSearching ? "Search Results" : "Now Showing";
-    $recTitle = isLoggedIn() ? 'Recommended For You' : 'Trending Now';
-
-    $allMoviesHtml = $renderMovies($moviesRaw, $allMoviesTitle, true, false);
-    $recHtml = $renderMovies($recommendedMovies, $recTitle, false, true);
-
-    if ($isSearching) {
-        echo $allMoviesHtml;
-        renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
-        echo $recHtml;
-    } else {
-        echo $recHtml;
-        echo $allMoviesHtml;
-        renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
-    }
-
-    function renderPagination($currentPage, $totalPages, $search, $genre, $language) {
-        if ($totalPages <= 1) return;
-        
-        $queryParams = [];
-        if ($search) $queryParams['search'] = $search;
-        if ($genre) $queryParams['genre'] = $genre;
-        if ($language) $queryParams['language'] = $language;
-        
-        $buildUrl = function($p) use ($queryParams) {
-            $params = $queryParams;
-            $params['page'] = $p;
-            return '?' . http_build_query($params);
-        };
-
-        echo '<div class="pagination" style="display: flex; justify-content: center; gap: 0.5rem; margin-top: -1rem; margin-bottom: var(--spacing-3xl);">';
-        
-        // Previous Button
-        if ($currentPage > 1) {
-            echo '<a href="' . $buildUrl($currentPage - 1) . '" class="btn btn-outline" style="padding: 0.5rem 1rem;">&laquo; Previous</a>';
-        }
-
-        // Page Numbers
-        for ($i = 1; $i <= $totalPages; $i++) {
-            $activeStyle = ($i == $currentPage) ? 'background: var(--primary-600); color: white; border-color: var(--primary-600);' : '';
-            echo '<a href="' . $buildUrl($i) . '" class="btn btn-outline" style="padding: 0.5rem 1rem; ' . $activeStyle . '">' . $i . '</a>';
-        }
-
-        // Next Button
-        if ($currentPage < $totalPages) {
-            echo '<a href="' . $buildUrl($currentPage + 1) . '" class="btn btn-outline" style="padding: 0.5rem 1rem;">Next &raquo;</a>';
-        }
-
-        echo '</div>';
-    }
-    ?>
+    </div>
 </div>
 
 <?php include 'includes/footer.php'; ?>

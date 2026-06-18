@@ -1,6 +1,12 @@
 <?php
 $page_title = 'Edit Movie';
-require_once 'includes/admin_header.php';
+require_once '../includes/config.php';
+require_once '../includes/functions.php';
+
+if (!isAdminLoggedIn()) {
+    header('Location: ../login.php');
+    exit;
+}
 
 $id = intval($_GET['id'] ?? 0);
 $movie = $pdo->prepare("SELECT * FROM movies WHERE movie_id = ?");
@@ -17,10 +23,9 @@ if($_SERVER['REQUEST_METHOD'] == 'POST'){
     $genre = trim($_POST['genre']);
     $language = trim($_POST['language']);
     $duration = intval($_POST['duration']);
-    $release_date = $_POST['release_date'] ?: null;
-    $poster = ltrim(trim($_POST['poster']), '/'); // Default to existing/manual path
+    $release_date = $_POST['release_date'] ?: null; // Standard YYYY-MM-DD
+    $poster = ltrim(trim($_POST['poster']), '/');
 
-    // Handle File Upload if a new one is provided
     if(isset($_FILES['poster_file']) && $_FILES['poster_file']['error'] == 0){
         $allowed = ['jpg','jpeg','png','gif','webp'];
         $ext = strtolower(pathinfo($_FILES['poster_file']['name'], PATHINFO_EXTENSION));
@@ -28,7 +33,7 @@ if($_SERVER['REQUEST_METHOD'] == 'POST'){
             if(!is_dir('../assets/uploads')) mkdir('../assets/uploads', 0755, true);
             $new_poster = 'assets/uploads/' . time() . '_' . basename($_FILES['poster_file']['name']);
             if(move_uploaded_file($_FILES['poster_file']['tmp_name'], '../' . $new_poster)){
-                $poster = $new_poster; // Use the newly uploaded file
+                $poster = $new_poster;
             }
         } else {
             $err = "Invalid file type. Only JPG, PNG, GIF, WEBP allowed.";
@@ -37,15 +42,20 @@ if($_SERVER['REQUEST_METHOD'] == 'POST'){
 
     if(!$title) {
         $err = 'Title is required';
+    } elseif(!$release_date) {
+        $err = 'Release date is required';
     } elseif(!$err) {
         $upd = $pdo->prepare("UPDATE movies SET title=?, description=?, genre=?, language=?, duration=?, poster=?, release_date=? WHERE movie_id = ?");
         $upd->execute([$title, $desc, $genre, $language, $duration, $poster, $release_date, $id]);
         $success = 'Movie updated successfully!';
+        
         $movie = $pdo->prepare("SELECT * FROM movies WHERE movie_id = ?");
         $movie->execute([$id]);
         $movie = $movie->fetch();
     }
 }
+
+require_once 'includes/admin_header.php';
 ?>
 
 <?php if($err): ?>
@@ -93,8 +103,8 @@ if($_SERVER['REQUEST_METHOD'] == 'POST'){
                     <input type="number" name="duration" class="form-input" style="width: 100%; padding: 0.625rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; font-size: 0.875rem;" value="<?= $movie['duration'] ?>">
                 </div>
                 <div class="form-group" style="margin-bottom: 1.5rem;">
-                    <label class="form-label" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #475569; font-size: 0.875rem;">Release Date</label>
-                    <input type="date" name="release_date" class="form-input" style="width: 100%; padding: 0.625rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; font-size: 0.875rem;" value="<?= $movie['release_date'] ?>">
+                    <label class="form-label" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #475569; font-size: 0.875rem;">Release Date *</label>
+                    <input type="date" name="release_date" class="form-input" style="width: 100%; padding: 0.625rem 1rem; border: 1px solid #e2e8f0; border-radius: 0.5rem; font-size: 0.875rem;" value="<?= $movie['release_date'] ?>" required>
                 </div>
                 <div class="form-group" style="margin-bottom: 1.5rem;">
                     <label class="form-label" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #475569; font-size: 0.875rem;">Poster URL / Manual Path</label>
@@ -117,18 +127,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST'){
     </div>
 </div>
 
-<div class="card">
-    <div class="card-header">
-        <h3>Poster Preview</h3>
-    </div>
-    <div class="card-body">
-        <div class="poster-preview" id="previewContainer" style="text-align: center; padding: 1.5rem; background: #f8fafc; border-radius: 0.5rem;">
-            <img id="posterPreview" src="" alt="Poster preview" style="display: none; max-width: 200px; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-            <div id="noImageMsg" style="color: #64748b;">Enter a poster URL to see preview</div>
-        </div>
-    </div>
-</div>
-
 <script>
     const baseUrl = '<?= BASE_URL ?>';
     const posterInput = document.getElementById('posterUrl');
@@ -142,28 +140,37 @@ if($_SERVER['REQUEST_METHOD'] == 'POST'){
     }
 
     function updatePreview() {
+        if (!posterInput) return;
         const path = posterInput.value.trim();
 
         if (!path) {
-            previewImg.style.display = 'none';
-            noImageMsg.style.display = 'block';
-            noImageMsg.innerHTML = 'Enter a poster URL to see preview';
+            if (previewImg) previewImg.style.display = 'none';
+            if (noImageMsg) {
+                noImageMsg.style.display = 'block';
+                noImageMsg.innerHTML = 'Enter a poster URL to see preview';
+            }
             return;
         }
 
         const fullUrl = getFullUrl(path);
-        previewImg.src = fullUrl;
-        previewImg.style.display = 'block';
-        noImageMsg.style.display = 'none';
+        if (previewImg) {
+            previewImg.src = fullUrl;
+            previewImg.style.display = 'block';
+        }
+        if (noImageMsg) noImageMsg.style.display = 'none';
 
-        previewImg.onerror = function() {
-            previewImg.style.display = 'none';
-            noImageMsg.style.display = 'block';
-            noImageMsg.innerHTML = 'Image not found or invalid URL';
-        };
+        if (previewImg) {
+            previewImg.onerror = function() {
+                previewImg.style.display = 'none';
+                if (noImageMsg) {
+                    noImageMsg.style.display = 'block';
+                    noImageMsg.innerHTML = 'Image not found or invalid URL';
+                }
+            };
+        }
     }
 
-    posterInput.addEventListener('input', updatePreview);
+    if (posterInput) posterInput.addEventListener('input', updatePreview);
     updatePreview();
 </script>
 

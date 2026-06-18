@@ -8,6 +8,13 @@ if (!isLoggedIn()) {
     $_SESSION['redirect_after_login'] = $_SERVER['REQUEST_URI'];
 }
 
+// Admin cannot book tickets
+if (isAdminLoggedIn()) {
+    $_SESSION['error'] = "Admin cannot book tickets. Please use a customer account.";
+    header("Location: admin/dashboard.php");
+    exit;
+}
+
 $movie_id = intval($_GET['id'] ?? 0);
 $showtime_id = intval($_GET['showtime'] ?? 0);
 
@@ -19,13 +26,20 @@ if(!$movie) {
     die('Movie not found');
 }
 
-$showStmt = $pdo->prepare("
-    SELECT * FROM showtimes 
-    WHERE movie_id = ? AND show_date >= CURDATE()
-    ORDER BY show_date, show_time
-");
-$showStmt->execute([$movie_id]);
-$showtimes = $showStmt->fetchAll();
+$today = date('Y-m-d');
+$isUpcoming = ($movie['release_date'] > $today);
+
+$showtimes = [];
+if (!$isUpcoming) {
+    // Only fetch showtimes if the movie is already released
+    $showStmt = $pdo->prepare("
+        SELECT * FROM showtimes 
+        WHERE movie_id = ? AND show_date >= CURDATE()
+        ORDER BY show_date, show_time
+    ");
+    $showStmt->execute([$movie_id]);
+    $showtimes = $showStmt->fetchAll();
+}
 
 if(!$showtime_id && !empty($showtimes)) {
     $showtime_id = $showtimes[0]['showtime_id'];
@@ -71,8 +85,8 @@ include 'includes/header.php';
                     </div>
                     <div class="movie-detail-item">
                         <div class="movie-detail-label">Status</div>
-                        <div class="movie-detail-value" style="color: <?= !empty($showtimes) ? 'var(--success)' : 'var(--warning)' ?>;">
-                            <?= !empty($showtimes) ? 'Now Showing' : 'Coming Soon' ?>
+                        <div class="movie-detail-value" style="color: <?= !$isUpcoming ? 'var(--success)' : 'var(--warning)' ?>;">
+                            <?= !$isUpcoming ? 'Now Showing' : 'Coming Soon' ?>
                         </div>
                     </div>
                     <div class="movie-detail-item">
@@ -85,11 +99,48 @@ include 'includes/header.php';
     </div>
 
     <!-- Booking Section -->
-    <?php if(empty($showtimes)): ?>
+    <?php 
+    $bookingLimitReached = false;
+    if (isLoggedIn() && !isAdminLoggedIn()) {
+        $stmtLimit = $pdo->prepare("SELECT COUNT(DISTINCT movie_id) FROM bookings WHERE customer_id = ? AND status = 'Confirmed'");
+        $stmtLimit->execute([currentUserId()]);
+        if ($stmtLimit->fetchColumn() >= 10) {
+            $stmtThisMovie = $pdo->prepare("SELECT COUNT(*) FROM bookings WHERE customer_id = ? AND movie_id = ? AND status = 'Confirmed'");
+            $stmtThisMovie->execute([currentUserId(), $movie_id]);
+            if ($stmtThisMovie->fetchColumn() == 0) {
+                $bookingLimitReached = true;
+            }
+        }
+    }
+    ?>
+
+    <?php if($isUpcoming): ?>
+        <div class="card" style="text-align: center; padding: var(--spacing-3xl);">
+            <div style="margin-bottom: var(--spacing-lg);">
+                <svg style="width: 64px; height: 64px; color: var(--warning);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                </svg>
+            </div>
+            <h3>Coming Soon to Theatres</h3>
+            <p class="text-muted" style="margin-bottom: var(--spacing-lg);">This movie is scheduled for release on <strong><?= date('F d, Y', strtotime($movie['release_date'])) ?></strong>. Booking will be available soon.</p>
+            <a href="index.php" class="btn btn-primary">Browse Other Movies</a>
+        </div>
+    <?php elseif($bookingLimitReached): ?>
+        <div class="card" style="text-align: center; padding: var(--spacing-3xl); border: 2px dashed #ef4444;">
+            <div style="margin-bottom: var(--spacing-lg);">
+                <svg style="width: 64px; height: 64px; color: #ef4444;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+            </div>
+            <h3 style="color: #ef4444;">Booking Limit Reached</h3>
+            <p class="text-muted" style="margin-bottom: var(--spacing-lg);">You have reached the maximum booking limit of <strong>10 movies</strong>. You cannot book tickets for any more new movies at this time.</p>
+            <a href="dashboard.php" class="btn btn-primary">View My Bookings</a>
+        </div>
+    <?php elseif(empty($showtimes)): ?>
         <div class="card" style="text-align: center; padding: var(--spacing-3xl);">
             <div style="margin-bottom: var(--spacing-lg);">
                 <svg style="width: 64px; height: 64px; color: var(--gray-400);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
             </div>
             <h3>No Showtimes Scheduled</h3>
@@ -270,6 +321,7 @@ let reservationExpiry = null;
 let timerInterval = null;
 
 async function fetchSeats() {
+    if (!showtime_id) return;
     try {
         const res = await fetch(`ajax/fetch_seats.php?showtime_id=${showtime_id}`);
         const data = await res.json();
@@ -308,7 +360,9 @@ async function fetchSeats() {
 
 function startTimer() {
     if (timerInterval) return;
-    document.getElementById('reservationTimer').style.display = 'flex';
+    const timerEl = document.getElementById('reservationTimer');
+    if (!timerEl) return;
+    timerEl.style.display = 'flex';
     
     timerInterval = setInterval(() => {
         const now = new Date().getTime();
@@ -339,10 +393,12 @@ function stopTimer() {
         clearInterval(timerInterval);
         timerInterval = null;
     }
-    document.getElementById('reservationTimer').style.display = 'none';
+    const timerEl = document.getElementById('reservationTimer');
+    if (timerEl) timerEl.style.display = 'none';
 }
 
 function renderSeats(seats) {
+    if (!seatMap) return;
     seatMap.innerHTML = '';
     let availableCount = 0;
     
@@ -375,7 +431,8 @@ function renderSeats(seats) {
         seatMap.appendChild(div);
     });
 
-    document.getElementById('seatsLeftCount').textContent = availableCount;
+    const leftCountEl = document.getElementById('seatsLeftCount');
+    if (leftCountEl) leftCountEl.textContent = availableCount;
 }
 
 async function toggleSeat(label, el) {
@@ -393,14 +450,12 @@ async function toggleSeat(label, el) {
         if (success) {
             selectedSeats.delete(label);
             el.classList.remove('selected');
-            // showNotification(`Seat ${label} released`, 'info');
         }
     } else {
         const success = await reserveSeat(label);
         if (success) {
             selectedSeats.add(label);
             el.classList.add('selected');
-            // showNotification(`Seat ${label} reserved`, 'success');
         }
     }
     
@@ -442,6 +497,7 @@ async function releaseSeat(label) {
 }
 
 function updateBookingUI() {
+    if (!bookingSummary) return;
     if (selectedSeats.size > 0) {
         bookingSummary.classList.add('active');
         seatsInput.value = Array.from(selectedSeats).join(',');
@@ -480,8 +536,10 @@ document.getElementById('bookNowBtn')?.addEventListener('click', function() {
     bookingForm.submit();
 });
 
-fetchSeats();
-setInterval(fetchSeats, 5000);
+if (showtime_id) {
+    fetchSeats();
+    setInterval(fetchSeats, 5000);
+}
 </script>
 
 <style>

@@ -7,6 +7,11 @@ if (!isLoggedIn()) {
     exit;
 }
 
+if (isAdminLoggedIn()) {
+    echo json_encode(['success' => false, 'message' => 'Admin cannot manage reservations.']);
+    exit;
+}
+
 $showtime_id = intval($_POST['showtime_id'] ?? 0);
 $seat_label = trim($_POST['seat_label'] ?? '');
 $customer_id = currentUserId();

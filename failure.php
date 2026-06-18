@@ -6,6 +6,12 @@ if (!isLoggedIn()) {
     exit;
 }
 
+if (isAdminLoggedIn()) {
+    $_SESSION['error'] = "Admin cannot book tickets. Please use a customer account.";
+    header("Location: admin/dashboard.php");
+    exit;
+}
+
 $booking_id = intval($_GET['booking_id'] ?? 0);
 
 if (!$booking_id) {

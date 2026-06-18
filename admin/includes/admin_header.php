@@ -405,3 +405,16 @@ $current_page = basename($_SERVER['PHP_SELF']);
             </div>
 
             <div class="admin-content">
+                <?php if (isset($_SESSION['error'])): ?>
+                    <div style="background: #fee2e2; color: #b91c1c; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem; border: 1px solid #fecaca;">
+                        <?= htmlspecialchars($_SESSION['error']) ?>
+                        <?php unset($_SESSION['error']); ?>
+                    </div>
+                <?php endif; ?>
+
+                <?php if (isset($_SESSION['success'])): ?>
+                    <div style="background: #d1fae5; color: #065f46; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem; border: 1px solid #a7f3d0;">
+                        <?= htmlspecialchars($_SESSION['success']) ?>
+                        <?php unset($_SESSION['success']); ?>
+                    </div>
+                <?php endif; ?>

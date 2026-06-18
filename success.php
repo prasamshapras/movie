@@ -7,6 +7,12 @@ if (!isLoggedIn()) {
     exit;
 }
 
+if (isAdminLoggedIn()) {
+    $_SESSION['error'] = "Admin cannot book tickets. Please use a customer account.";
+    header("Location: admin/dashboard.php");
+    exit;
+}
+
 $booking_id = intval($_GET['booking_id'] ?? 0);
 $transaction_uuid = $_GET['transaction_uuid'] ?? null;
 
@@ -34,6 +40,19 @@ if (!$mainBooking) {
 if ($transaction_uuid && $mainBooking['status'] === 'Pending') {
     try {
         $pdo->beginTransaction();
+
+        // Check booking limit before confirming
+        $stmtLimit = $pdo->prepare("SELECT COUNT(DISTINCT movie_id) FROM bookings WHERE customer_id = ? AND status = 'Confirmed'");
+        $stmtLimit->execute([currentUserId()]);
+        $totalConfirmedMovies = $stmtLimit->fetchColumn();
+
+        if ($totalConfirmedMovies >= 10) {
+            $stmtThisMovie = $pdo->prepare("SELECT COUNT(*) FROM bookings WHERE customer_id = ? AND movie_id = ? AND status = 'Confirmed'");
+            $stmtThisMovie->execute([currentUserId(), $mainBooking['movie_id']]);
+            if ($stmtThisMovie->fetchColumn() == 0) {
+                throw new Exception("You have reached the maximum booking limit of 10 movies.");
+            }
+        }
 
         $allStmt = $pdo->prepare("
             SELECT *

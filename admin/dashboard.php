@@ -2,8 +2,9 @@
 $page_title = 'Dashboard';
 require_once 'includes/admin_header.php';
 
-$movieCount = $pdo->query("SELECT COUNT(*) FROM movies")->fetchColumn();
-$showCount = $pdo->query("SELECT COUNT(*) FROM showtimes WHERE show_date >= CURDATE()")->fetchColumn();
+$totalMovies = $pdo->query("SELECT COUNT(*) FROM movies")->fetchColumn();
+$nowShowingCount = $pdo->query("SELECT COUNT(*) FROM movies WHERE release_date <= CURDATE()")->fetchColumn();
+$upcomingMoviesCount = $pdo->query("SELECT COUNT(*) FROM movies WHERE release_date > CURDATE()")->fetchColumn();
 $bookingCount = $pdo->query("SELECT COUNT(*) FROM bookings WHERE status = 'Confirmed'")->fetchColumn();
 $revenue = $pdo->query("SELECT SUM(amount) FROM bookings WHERE status = 'Confirmed' AND payment_status = 'paid'")->fetchColumn();
 
@@ -17,22 +18,26 @@ $recentBookings = $pdo->query("
 ")->fetchAll();
 ?>
 
-<div class="stats-grid">
-    <div class="stat-card">
-        <div class="stat-label">Total Movies</div>
-        <div class="stat-value"><?= $movieCount ?></div>
+<div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+    <div class="stat-card" style="background: white; padding: 1.5rem; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <div class="stat-label" style="font-size: 0.875rem; color: #64748b; font-weight: 600; text-transform: uppercase; margin-bottom: 0.5rem;">Now Showing</div>
+        <div class="stat-value" style="font-size: 1.875rem; font-weight: 700; color: #10b981;"><?= $nowShowingCount ?></div>
+        <div style="font-size: 0.75rem; color: #94a3b8; mt: 0.25rem;">Released Movies</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-label">Upcoming Shows</div>
-        <div class="stat-value"><?= $showCount ?></div>
+    <div class="stat-card" style="background: white; padding: 1.5rem; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <div class="stat-label" style="font-size: 0.875rem; color: #64748b; font-weight: 600; text-transform: uppercase; margin-bottom: 0.5rem;">Upcoming Movies</div>
+        <div class="stat-value" style="font-size: 1.875rem; font-weight: 700; color: #f59e0b;"><?= $upcomingMoviesCount ?></div>
+        <div style="font-size: 0.75rem; color: #94a3b8; mt: 0.25rem;">Future Releases</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-label">Total Bookings</div>
-        <div class="stat-value"><?= $bookingCount ?></div>
+    <div class="stat-card" style="background: white; padding: 1.5rem; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <div class="stat-label" style="font-size: 0.875rem; color: #64748b; font-weight: 600; text-transform: uppercase; margin-bottom: 0.5rem;">Total Bookings</div>
+        <div class="stat-value" style="font-size: 1.875rem; font-weight: 700; color: #3b82f6;"><?= $bookingCount ?></div>
+        <div style="font-size: 0.75rem; color: #94a3b8; mt: 0.25rem;">Confirmed Tickets</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-label">Revenue</div>
-        <div class="stat-value">NPR <?= number_format($revenue ?? 0, 2) ?></div>
+    <div class="stat-card" style="background: white; padding: 1.5rem; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <div class="stat-label" style="font-size: 0.875rem; color: #64748b; font-weight: 600; text-transform: uppercase; margin-bottom: 0.5rem;">Total Revenue</div>
+        <div class="stat-value" style="font-size: 1.875rem; font-weight: 700; color: #1e293b;">NPR <?= number_format($revenue ?? 0, 0) ?></div>
+        <div style="font-size: 0.75rem; color: #94a3b8; mt: 0.25rem;">From Confirmed Payments</div>
     </div>
 </div>
 

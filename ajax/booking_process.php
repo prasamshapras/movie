@@ -16,11 +16,36 @@ if (!isLoggedIn()) {
     exit;
 }
 
+if (isAdminLoggedIn()) {
+    $_SESSION['error'] = "Admin cannot book tickets. Please use a customer account.";
+    header("Location: ../admin/dashboard.php");
+    exit;
+}
+
 if (!$movie_id || !$showtime_id || !$selected) {
     die('No seats selected.');
 }
 
 $customer_id = currentUserId();
+
+// Check booking limit: Max 10 confirmed movies
+$stmtLimit = $pdo->prepare("SELECT COUNT(DISTINCT movie_id) FROM bookings WHERE customer_id = ? AND status = 'Confirmed'");
+$stmtLimit->execute([$customer_id]);
+$totalConfirmedMovies = $stmtLimit->fetchColumn();
+
+if ($totalConfirmedMovies >= 10) {
+    // Check if current movie is already one of the 10 confirmed movies
+    $stmtThisMovie = $pdo->prepare("SELECT COUNT(*) FROM bookings WHERE customer_id = ? AND movie_id = ? AND status = 'Confirmed'");
+    $stmtThisMovie->execute([$customer_id, $movie_id]);
+    $alreadyBookedThisMovie = $stmtThisMovie->fetchColumn();
+    
+    if ($alreadyBookedThisMovie == 0) {
+        echo "<h3>Booking limit reached</h3>";
+        echo "<p>You have reached the maximum booking limit of 10 movies.</p>";
+        echo "<a href='../index.php'>Back to Home</a>";
+        exit;
+    }
+}
 
 $seatLabels = array_values(array_unique(array_filter(array_map('trim', explode(',', $selected)))));
 
