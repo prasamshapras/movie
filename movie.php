@@ -29,13 +29,54 @@ if(!$movie) {
 $today = date('Y-m-d');
 $isUpcoming = ($movie['release_date'] > $today);
 
+// DAILY AUTO-UPDATE LOGIC: 
+// If it's a Now Showing movie, ensure it has at least one showtime for TODAY.
+if (!$isUpcoming) {
+    // 1. Check if today's showtime exists
+    $checkShow = $pdo->prepare("SELECT COUNT(*) FROM showtimes WHERE movie_id = ? AND show_date = ?");
+    $checkShow->execute([$movie_id, $today]);
+    
+    if ($checkShow->fetchColumn() == 0) {
+        // 2. Create today's showtime automatically (18:30:00, Screen 1, NPR 250)
+        $ins = $pdo->prepare("INSERT INTO showtimes (movie_id, show_date, show_time, screen, base_price) VALUES (?, ?, '18:30:00', 'Screen 1', 250.00)");
+        $ins->execute([$movie_id, $today]);
+        $newShowtimeId = $pdo->lastInsertId();
+        
+        // 3. Generate seats for this new showtime (Rows A-D, 1-10)
+        $rows = ['A', 'B', 'C', 'D'];
+        $seatIns = $pdo->prepare("INSERT INTO seats (showtime_id, seat_label, status) VALUES (?, ?, 'available')");
+        foreach ($rows as $r) {
+            for ($i = 1; $i <= 10; $i++) {
+                $seatIns->execute([$newShowtimeId, $r . $i]);
+            }
+        }
+    } else {
+        // 4. If showtime exists, ensure seats exist (handle cases where showtime was added but seats weren't)
+        $existingShows = $pdo->prepare("SELECT showtime_id FROM showtimes WHERE movie_id = ? AND show_date = ?");
+        $existingShows->execute([$movie_id, $today]);
+        foreach ($existingShows->fetchAll() as $st) {
+            $checkSeats = $pdo->prepare("SELECT COUNT(*) FROM seats WHERE showtime_id = ?");
+            $checkSeats->execute([$st['showtime_id']]);
+            if ($checkSeats->fetchColumn() == 0) {
+                $rows = ['A', 'B', 'C', 'D'];
+                $seatIns = $pdo->prepare("INSERT INTO seats (showtime_id, seat_label, status) VALUES (?, ?, 'available')");
+                foreach ($rows as $r) {
+                    for ($i = 1; $i <= 10; $i++) {
+                        $seatIns->execute([$st['showtime_id'], $r . $i]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 $showtimes = [];
 if (!$isUpcoming) {
-    // Only fetch showtimes if the movie is already released
+    // Only fetch showtimes for TODAY as per daily update requirement
     $showStmt = $pdo->prepare("
         SELECT * FROM showtimes 
-        WHERE movie_id = ? AND show_date >= CURDATE()
-        ORDER BY show_date, show_time
+        WHERE movie_id = ? AND show_date = CURDATE()
+        ORDER BY show_time ASC
     ");
     $showStmt->execute([$movie_id]);
     $showtimes = $showStmt->fetchAll();

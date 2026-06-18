@@ -16,75 +16,52 @@ $offset = ($page - 1) * $limit;
 $isSearching = !empty($search) || !empty($filter_genre) || !empty($filter_language);
 
 // 1. Logic for Now Showing / Search Results
-// Strictly show movies released today or in the past.
-$countQuery = "SELECT COUNT(*) FROM movies m WHERE m.release_date IS NOT NULL AND m.release_date <= CURDATE()";
 $params = [];
+$conditions = [];
 
 if (!empty($search)) {
-    $countQuery .= " AND (m.title LIKE ? OR m.description LIKE ?)";
-    $params[] = "%$search%";
+    // Search ONLY in movie title, case-insensitive
+    $conditions[] = "LOWER(m.title) LIKE LOWER(?)";
     $params[] = "%$search%";
 }
 
 if (!empty($filter_genre)) {
-    $countQuery .= " AND m.genre LIKE ?";
+    // Genre filter - using exact match as requested
+    $conditions[] = "m.genre LIKE ?";
     $params[] = "%$filter_genre%";
 }
 
 if (!empty($filter_language)) {
-    $countQuery .= " AND m.language = ?";
+    // Language filter - using exact match as requested
+    $conditions[] = "m.language = ?";
     $params[] = $filter_language;
 }
 
-$stmtCount = $pdo->prepare($countQuery);
+// Base condition: For search, show anything released today or before. 
+// If no search/filter, show only today's releases.
+$dateCondition = $isSearching ? "m.release_date <= CURDATE()" : "m.release_date = CURDATE()";
+$whereSql = "WHERE m.release_date IS NOT NULL AND $dateCondition";
+
+if (!empty($conditions)) {
+    $whereSql .= " AND " . implode(" AND ", $conditions);
+}
+
+// Count query for pagination
+$stmtCount = $pdo->prepare("SELECT COUNT(*) FROM movies m $whereSql");
 $stmtCount->execute($params);
 $totalResults = $stmtCount->fetchColumn();
 $totalPages = ceil($totalResults / $limit);
 
-// Build main query for Now Showing
-// AI Improvement: Added Relevance Score (Title matches are 3x more important than Description)
-// Using strict continuous substring matching with LIKE
-$relevanceSql = "";
-$searchParams = [];
-if (!empty($search)) {
-    $relevanceSql = ", (
-        (CASE WHEN m.title LIKE ? THEN 3 ELSE 0 END) + 
-        (CASE WHEN m.description LIKE ? THEN 1 ELSE 0 END)
-    ) AS relevance_score";
-    $searchParams = ["%$search%", "%$search%"];
-} else {
-    $relevanceSql = ", 0 AS relevance_score";
-}
-
+// Build main query
 $query = "SELECT m.*, 
           (SELECT COUNT(*) FROM showtimes s WHERE s.movie_id = m.movie_id AND s.show_date >= CURDATE()) as upcoming_showtimes
-          $relevanceSql
           FROM movies m 
-          WHERE m.release_date <= CURDATE()";
-
-if (!empty($search)) {
-    $query .= " AND (m.title LIKE ? OR m.description LIKE ?)";
-}
-
-if (!empty($filter_genre)) {
-    $query .= " AND m.genre LIKE ?";
-}
-
-if (!empty($filter_language)) {
-    $query .= " AND m.language = ?";
-}
-
-// Order Logic: Search results use Relevance Score, otherwise use Release Date
-if (!empty($search)) {
-    $query .= " ORDER BY relevance_score DESC, m.release_date DESC LIMIT $limit OFFSET $offset";
-} else {
-    $query .= " ORDER BY m.release_date DESC LIMIT $limit OFFSET $offset";
-}
+          $whereSql
+          ORDER BY m.title ASC
+          LIMIT $limit OFFSET $offset";
 
 $stmt = $pdo->prepare($query);
-// Combine searchParams for relevance calculation and the regular params for filtering
-$finalParams = array_merge($searchParams, $params);
-$stmt->execute($finalParams);
+$stmt->execute($params);
 $moviesRaw = $stmt->fetchAll();
 
 // 2. Logic for Upcoming Shows (only on home page first page, and only if not searching)
@@ -134,7 +111,7 @@ $renderMovies = function($movies, $title, $isRec = false, $isUpcomingSection = f
                 <div class="movie-card">
                     <div class="movie-poster-wrapper">
                         <img src="<?= getMoviePoster($movie['poster']) ?>" class="movie-poster" alt="<?= htmlspecialchars($movie['title']) ?>">
-                        <?php if ($isUpcoming): ?>
+                        <?php if ($isUpcoming || $isUpcomingSection): ?>
                             <div style="position: absolute; top: var(--spacing-md); right: var(--spacing-md); background: var(--warning); color: white; padding: 0.25rem 0.75rem; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 600;">Coming Soon</div>
                         <?php endif; ?>
                     </div>
@@ -156,16 +133,18 @@ $renderMovies = function($movies, $title, $isRec = false, $isUpcomingSection = f
                         </div>
 
                         <?php if ($isUpcomingSection || $isUpcoming): ?>
-                            <p style="font-size: 0.875rem; color: var(--gray-500); margin-top: 0.75rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; height: 2.5rem;">
-                                <?= htmlspecialchars($movie['description']) ?>
-                            </p>
-                            <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--gray-100);">
-                                <a href="movie.php?id=<?= $movie['movie_id'] ?>" class="btn btn-outline" style="width: 100%; justify-content: center;">Movie Info</a>
-                            </div>
+                            <!-- Upcoming movies show ONLY requested info and label -->
                         <?php else: ?>
-                            <div class="movie-price">
-                                <span class="price">From NPR 250</span>
-                                <a href="movie.php?id=<?= $movie['movie_id'] ?>" class="btn btn-primary" style="<?= $isRec ? 'padding: 0.5rem 1rem;' : '' ?>">Book Now</a>
+                            <!-- Now Showing movies show Booking, Showtimes, and Seat Selection UI -->
+                            <div style="margin-top: var(--spacing-md); padding-top: var(--spacing-md); border-top: 1px solid var(--gray-100);">
+                                <div style="display: flex; align-items: center; gap: var(--spacing-xs); color: var(--success); font-size: 0.75rem; font-weight: 600; margin-bottom: var(--spacing-sm);">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    Showtimes & Seats Available
+                                </div>
+                                <div class="movie-price">
+                                    <span class="price">NPR 250</span>
+                                    <a href="movie.php?id=<?= $movie['movie_id'] ?>" class="btn btn-primary" style="padding: 0.5rem 1rem;">Book Ticket</a>
+                                </div>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -218,15 +197,28 @@ $upcomingHtml = $renderMovies($upcomingMovies, "Upcoming Shows", false, true);
 
 // AJAX response for live search
 if (isset($_GET['ajax'])) {
-    if ($isSearching) {
-        echo $allMoviesHtml;
-        renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
-        echo $recHtml;
+    if (empty($moviesRaw) && $isSearching) {
+        echo '<div class="card" style="text-align: center; padding: var(--spacing-3xl); grid-column: 1 / -1;">
+                <div style="margin-bottom: var(--spacing-lg);">
+                    <svg style="width: 64px; height: 64px; color: var(--gray-400);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                    </svg>
+                </div>
+                <h3>No movies found</h3>
+                <p class="text-muted">We couldn\'t find any movies matching "<strong>' . htmlspecialchars($search) . '</strong>".</p>
+                <a href="index.php" class="btn btn-outline" style="margin-top: var(--spacing-lg);">Clear Search</a>
+              </div>';
     } else {
-        echo $recHtml;
-        echo $allMoviesHtml;
-        if ($page == 1) echo $upcomingHtml;
-        renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
+        if ($isSearching) {
+            // ONLY show search results, no recommendations or upcoming
+            echo $allMoviesHtml;
+            renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
+        } else {
+            echo $recHtml;
+            echo $allMoviesHtml;
+            if ($page == 1) echo $upcomingHtml;
+            renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
+        }
     }
     exit;
 }
@@ -288,9 +280,9 @@ include 'includes/header.php';
     <div id="movieResults">
         <?php 
         if ($isSearching) {
+            // ONLY show search results in main view too
             echo $allMoviesHtml;
             renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
-            echo $recHtml;
         } else {
             echo $recHtml;
             echo $allMoviesHtml;
