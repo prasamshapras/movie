@@ -37,9 +37,34 @@ if (!$mainBooking) {
 }
 
 // If coming from payment, process confirmation
-if ($transaction_uuid && $mainBooking['status'] === 'Pending') {
+if (($transaction_uuid || isset($_GET['data'])) && $mainBooking['status'] === 'Pending') {
     try {
         $pdo->beginTransaction();
+
+        // eSewa V2 Verification (if data is returned by eSewa)
+        if (isset($_GET['data'])) {
+            $eSewaData = verifyEsewaResponse($_GET['data']);
+            if (!$eSewaData) {
+                throw new Exception("eSewa signature verification failed.");
+            }
+            
+            $paidAmount = (float)str_replace(',', '', $eSewaData['total_amount']);
+            
+            // Check if amount matches
+            if (isset($ESEWA_TEST_MODE) && $ESEWA_TEST_MODE) {
+                $expectedAmount = 1.00;
+            } else {
+                $payStmt = $pdo->prepare("SELECT amount FROM payments WHERE booking_id = ? ORDER BY payment_id DESC LIMIT 1");
+                $payStmt->execute([$booking_id]);
+                $expectedAmount = (float)$payStmt->fetchColumn();
+            }
+            
+            if (abs($paidAmount - $expectedAmount) > 0.01) {
+                throw new Exception("Amount mismatch. Expected: $expectedAmount, Paid: $paidAmount");
+            }
+            
+            $transaction_uuid = $eSewaData['transaction_uuid'];
+        }
 
         // Check booking limit before confirming
         $stmtLimit = $pdo->prepare("SELECT COUNT(DISTINCT movie_id) FROM bookings WHERE customer_id = ? AND status = 'Confirmed'");
@@ -57,11 +82,11 @@ if ($transaction_uuid && $mainBooking['status'] === 'Pending') {
         $allStmt = $pdo->prepare("
             SELECT *
             FROM bookings
-            WHERE customer_id = ?
-            AND showtime_id = ?
+            WHERE transaction_uuid = ?
+            AND customer_id = ?
             AND status = 'Pending'
         ");
-        $allStmt->execute([currentUserId(), $mainBooking['showtime_id']]);
+        $allStmt->execute([$transaction_uuid, currentUserId()]);
         $allBookings = $allStmt->fetchAll();
 
         foreach ($allBookings as $booking) {
@@ -82,13 +107,13 @@ if ($transaction_uuid && $mainBooking['status'] === 'Pending') {
     }
 }
 
-// Fetch all seats in this transaction/showtime for this user
+// Fetch all seats in this transaction for this user
 $seatStmt = $pdo->prepare("
     SELECT seat_label, amount 
     FROM bookings 
-    WHERE customer_id = ? AND showtime_id = ? AND status = 'Confirmed'
+    WHERE customer_id = ? AND payment_ref = ? AND status = 'Confirmed'
 ");
-$seatStmt->execute([currentUserId(), $mainBooking['showtime_id']]);
+$seatStmt->execute([currentUserId(), $transaction_uuid]);
 $allSeats = $seatStmt->fetchAll();
 
 $page_title = 'Booking Success';

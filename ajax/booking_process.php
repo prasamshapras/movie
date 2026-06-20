@@ -129,11 +129,12 @@ try {
 
     $insertBooking = $pdo->prepare("
         INSERT INTO bookings
-        (customer_id, showtime_id, seat_label, amount, status, payment_status, movie_id)
-        VALUES (?, ?, ?, ?, 'Pending', 'Unpaid', ?)
+        (customer_id, showtime_id, seat_label, amount, status, payment_status, movie_id, transaction_uuid)
+        VALUES (?, ?, ?, ?, 'Pending', 'Unpaid', ?, ?)
     ");
 
     $bookingIds = [];
+    $transaction_uuid = "TXN" . $customer_id . time() . bin2hex(random_bytes(4));
 
     foreach ($seatLabels as $seat) {
         $insertBooking->execute([
@@ -141,7 +142,8 @@ try {
             $showtime_id,
             $seat,
             $base_price,
-            $movie_id
+            $movie_id,
+            $transaction_uuid
         ]);
 
         $bookingIds[] = $pdo->lastInsertId();

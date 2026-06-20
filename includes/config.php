@@ -29,6 +29,9 @@ define('ESEWA_SECRET_KEY',   '8gBm/:&EnhH.1/q');
 define('ESEWA_PAYMENT_URL',  'https://rc-epay.esewa.com.np/api/epay/main/v2/form');
 define('ESEWA_VERIFY_URL',   'https://uat.esewa.com.np/api/epay/transaction/status/');
 
+// Set to true for sandbox testing with Rs. 1, false for real ticket price
+$ESEWA_TEST_MODE = true; 
+
 // ─── BASE_URL ─────────────────────────────────────────────────────────────────
 // Dynamically built so it works on any port (80, 8080, etc.)
 define('BASE_URL', (function () {

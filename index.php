@@ -37,10 +37,8 @@ if (!empty($filter_language)) {
     $params[] = $filter_language;
 }
 
-// Base condition: For search, show anything released today or before. 
-// If no search/filter, show only today's releases.
-$dateCondition = $isSearching ? "m.release_date <= CURDATE()" : "m.release_date = CURDATE()";
-$whereSql = "WHERE m.release_date IS NOT NULL AND $dateCondition";
+// Base condition: Show anything released today or before.
+$whereSql = "WHERE m.release_date IS NOT NULL AND m.release_date <= CURDATE()";
 
 if (!empty($conditions)) {
     $whereSql .= " AND " . implode(" AND ", $conditions);
@@ -57,7 +55,7 @@ $query = "SELECT m.*,
           (SELECT COUNT(*) FROM showtimes s WHERE s.movie_id = m.movie_id AND s.show_date >= CURDATE()) as upcoming_showtimes
           FROM movies m 
           $whereSql
-          ORDER BY m.title ASC
+          ORDER BY m.release_date DESC, m.title ASC
           LIMIT $limit OFFSET $offset";
 
 $stmt = $pdo->prepare($query);
@@ -70,7 +68,7 @@ if (!$isSearching && $page == 1) {
     $stmtUp = $pdo->query("SELECT * FROM movies m 
                            WHERE m.release_date IS NOT NULL AND m.release_date > CURDATE() 
                            ORDER BY m.release_date ASC 
-                           LIMIT 3");
+                           LIMIT 4");
     $upcomingMovies = $stmtUp->fetchAll();
 }
 
@@ -92,7 +90,6 @@ $recommendedMovies = getRecommendedMovies($pdo, currentUserId(), 4, ['time' => d
 
 // Function to render movie sections
 $renderMovies = function($movies, $title, $isRec = false, $isUpcomingSection = false) {
-    if (empty($movies)) return '';
     $today = date('Y-m-d');
     ob_start();
     ?>
@@ -105,52 +102,59 @@ $renderMovies = function($movies, $title, $isRec = false, $isUpcomingSection = f
                 </span>
             <?php endif; ?>
         </div>
-        <div class="movie-grid">
-            <?php foreach ($movies as $movie): ?>
-                <?php $isUpcoming = ($movie['release_date'] > $today); ?>
-                <div class="movie-card">
-                    <div class="movie-poster-wrapper">
-                        <img src="<?= getMoviePoster($movie['poster']) ?>" class="movie-poster" alt="<?= htmlspecialchars($movie['title']) ?>">
-                        <?php if ($isUpcoming || $isUpcomingSection): ?>
-                            <div style="position: absolute; top: var(--spacing-md); right: var(--spacing-md); background: var(--warning); color: white; padding: 0.25rem 0.75rem; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 600;">Coming Soon</div>
-                        <?php endif; ?>
-                    </div>
-                    <div class="movie-info">
-                        <h3 class="movie-title"><?= htmlspecialchars($movie['title']) ?></h3>
-                        <div class="movie-meta">
-                            <?php 
-                            $genres = explode(',', $movie['genre']);
-                            $limit = $isRec ? 2 : count($genres);
-                            foreach(array_slice($genres, 0, $limit) as $genre): ?>
-                                <span class="badge"><?= htmlspecialchars(trim($genre)) ?></span>
-                            <?php endforeach; ?>
-                            <span class="badge"><?= htmlspecialchars($movie['language']) ?></span>
-                        </div>
-                        <div class="movie-details">
-                            <span><?= $movie['duration'] ?> min</span>
-                            <span>•</span>
-                            <span><?= date('M d, Y', strtotime($movie['release_date'])) ?></span>
-                        </div>
 
-                        <?php if ($isUpcomingSection || $isUpcoming): ?>
-                            <!-- Upcoming movies show ONLY requested info and label -->
-                        <?php else: ?>
-                            <!-- Now Showing movies show Booking, Showtimes, and Seat Selection UI -->
-                            <div style="margin-top: var(--spacing-md); padding-top: var(--spacing-md); border-top: 1px solid var(--gray-100);">
-                                <div style="display: flex; align-items: center; gap: var(--spacing-xs); color: var(--success); font-size: 0.75rem; font-weight: 600; margin-bottom: var(--spacing-sm);">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    Showtimes & Seats Available
-                                </div>
-                                <div class="movie-price">
-                                    <span class="price">NPR 250</span>
-                                    <a href="movie.php?id=<?= $movie['movie_id'] ?>" class="btn btn-primary" style="padding: 0.5rem 1rem;">Book Ticket</a>
-                                </div>
+        <?php if (empty($movies)): ?>
+            <div class="card" style="text-align: center; padding: var(--spacing-2xl); background: var(--gray-50); border: 1px dashed var(--gray-200);">
+                <p class="text-muted" style="margin: 0;">No <?= strtolower($title) ?> available at the moment.</p>
+            </div>
+        <?php else: ?>
+            <div class="movie-grid">
+                <?php foreach ($movies as $movie): ?>
+                    <?php $isUpcoming = ($movie['release_date'] > $today); ?>
+                    <div class="movie-card">
+                        <div class="movie-poster-wrapper">
+                            <img src="<?= getMoviePoster($movie['poster']) ?>" class="movie-poster" alt="<?= htmlspecialchars($movie['title']) ?>">
+                            <?php if ($isUpcoming || $isUpcomingSection): ?>
+                                <div style="position: absolute; top: var(--spacing-md); right: var(--spacing-md); background: var(--warning); color: white; padding: 0.25rem 0.75rem; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 600;">Coming Soon</div>
+                            <?php endif; ?>
+                        </div>
+                        <div class="movie-info">
+                            <h3 class="movie-title"><?= htmlspecialchars($movie['title']) ?></h3>
+                            <div class="movie-meta">
+                                <?php 
+                                $genres = explode(',', $movie['genre']);
+                                $limit = $isRec ? 2 : count($genres);
+                                foreach(array_slice($genres, 0, $limit) as $genre): ?>
+                                    <span class="badge"><?= htmlspecialchars(trim($genre)) ?></span>
+                                <?php endforeach; ?>
+                                <span class="badge"><?= htmlspecialchars($movie['language']) ?></span>
                             </div>
-                        <?php endif; ?>
+                            <div class="movie-details">
+                                <span><?= $movie['duration'] ?> min</span>
+                                <span>•</span>
+                                <span><?= date('M d, Y', strtotime($movie['release_date'])) ?></span>
+                            </div>
+
+                            <?php if ($isUpcomingSection || $isUpcoming): ?>
+                                <!-- Upcoming movies show ONLY requested info and label -->
+                            <?php else: ?>
+                                <!-- Now Showing movies show Booking, Showtimes, and Seat Selection UI -->
+                                <div style="margin-top: var(--spacing-md); padding-top: var(--spacing-md); border-top: 1px solid var(--gray-100);">
+                                    <div style="display: flex; align-items: center; gap: var(--spacing-xs); color: var(--success); font-size: 0.75rem; font-weight: 600; margin-bottom: var(--spacing-sm);">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        Showtimes & Seats Available
+                                    </div>
+                                    <div class="movie-price">
+                                        <span class="price">NPR 250</span>
+                                        <a href="movie.php?id=<?= $movie['movie_id'] ?>" class="btn btn-primary" style="padding: 0.5rem 1rem;">Book Ticket</a>
+                                    </div>
+                                </div>
+                            <?php endif; ?>
+                        </div>
                     </div>
-                </div>
-            <?php endforeach; ?>
-        </div>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
     </section>
     <?php
     return ob_get_clean();
@@ -214,8 +218,9 @@ if (isset($_GET['ajax'])) {
             echo $allMoviesHtml;
             renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
         } else {
-            echo $recHtml;
+            // Order: Now Showing -> Recommended -> Upcoming
             echo $allMoviesHtml;
+            echo $recHtml;
             if ($page == 1) echo $upcomingHtml;
             renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
         }
@@ -280,12 +285,13 @@ include 'includes/header.php';
     <div id="movieResults">
         <?php 
         if ($isSearching) {
-            // ONLY show search results in main view too
+            // ONLY show search results in main view
             echo $allMoviesHtml;
             renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
         } else {
-            echo $recHtml;
+            // Reordered: Now Showing -> Recommended -> Upcoming
             echo $allMoviesHtml;
+            echo $recHtml;
             if ($page == 1) echo $upcomingHtml;
             renderPagination($page, $totalPages, $search, $filter_genre, $filter_language);
         }
