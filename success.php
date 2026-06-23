@@ -15,12 +15,18 @@ if (isAdminLoggedIn()) {
 
 $booking_id = intval($_GET['booking_id'] ?? 0);
 $transaction_uuid = $_GET['transaction_uuid'] ?? null;
+$transaction_code = null;
 
 if (!$booking_id) {
     die('Invalid booking.');
 }
 
-// Fetch the main booking
+/*
+|--------------------------------------------------------------------------
+| Fetch Main Booking
+|--------------------------------------------------------------------------
+*/
+
 $stmt = $pdo->prepare("
     SELECT 
         b.*, 
@@ -38,238 +44,200 @@ $stmt = $pdo->prepare("
     AND b.customer_id = ?
 ");
 $stmt->execute([$booking_id, currentUserId()]);
-$mainBooking = $stmt->fetch();
+$mainBooking = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$mainBooking) {
     die('Booking not found.');
 }
 
-// If eSewa returns data, verify the real eSewa payment response
-// If local simulation returns transaction_uuid, confirm directly for demo
-if (($transaction_uuid || isset($_GET['data'])) && $mainBooking['status'] === 'Pending') {
-    try {
-        $pdo->beginTransaction();
+/*
+|--------------------------------------------------------------------------
+| Get Transaction UUID
+|--------------------------------------------------------------------------
+| For local simulation, transaction_uuid comes from URL.
+| For eSewa real success, transaction_uuid comes from data.
+| If not in URL, use booking table transaction_uuid.
+*/
 
-        /*
-        |--------------------------------------------------------------------------
-        | eSewa V2 Success Response Verification
-        |--------------------------------------------------------------------------
-        | eSewa redirects to success.php?booking_id=...&data=BASE64_RESPONSE
-        | Local simulation redirects with transaction_uuid only.
-        */
+if (isset($_GET['data'])) {
+    $eSewaData = verifyEsewaResponse($_GET['data']);
 
-        if (isset($_GET['data'])) {
-            $eSewaData = verifyEsewaResponse($_GET['data']);
+    if (!$eSewaData) {
+        die("eSewa signature verification failed.");
+    }
 
-            if (!$eSewaData) {
-                throw new Exception("eSewa signature verification failed.");
-            }
+    if (($eSewaData['status'] ?? '') !== 'COMPLETE') {
+        die("Payment is not complete.");
+    }
 
-            if (($eSewaData['status'] ?? '') !== 'COMPLETE') {
-                throw new Exception("eSewa payment is not complete.");
-            }
+    if (($eSewaData['product_code'] ?? '') !== ESEWA_PRODUCT_CODE) {
+        die("Invalid eSewa product code.");
+    }
 
-            if (($eSewaData['product_code'] ?? '') !== ESEWA_PRODUCT_CODE) {
-                throw new Exception("Invalid eSewa product code.");
-            }
+    $transaction_uuid = $eSewaData['transaction_uuid'] ?? null;
+    $transaction_code = $eSewaData['transaction_code'] ?? null;
+}
 
-            $paidAmount = (float) str_replace(',', '', $eSewaData['total_amount']);
+if (!$transaction_uuid && !empty($mainBooking['transaction_uuid'])) {
+    $transaction_uuid = $mainBooking['transaction_uuid'];
+}
 
-            // Expected amount check
-            if (isset($ESEWA_TEST_MODE) && $ESEWA_TEST_MODE) {
-                $expectedAmount = 1.00;
-            } else {
-                $payStmt = $pdo->prepare("
-                    SELECT amount 
-                    FROM payments 
-                    WHERE booking_id = ? 
-                    ORDER BY payment_id DESC 
-                    LIMIT 1
-                ");
-                $payStmt->execute([$booking_id]);
-                $expectedAmount = (float) $payStmt->fetchColumn();
+if (!$transaction_code) {
+    $transaction_code = $transaction_uuid;
+}
 
-                if (!$expectedAmount) {
-                    $expectedAmount = (float) $mainBooking['amount'];
-                }
-            }
+if (!$transaction_uuid) {
+    die("Transaction UUID missing. Cannot confirm booking group.");
+}
 
-            if (abs($paidAmount - $expectedAmount) > 0.01) {
-                throw new Exception("Amount mismatch. Expected: $expectedAmount, Paid: $paidAmount");
-            }
+/*
+|--------------------------------------------------------------------------
+| Confirm All Seats Under Same Transaction UUID
+|--------------------------------------------------------------------------
+*/
 
-            $transaction_uuid = $eSewaData['transaction_uuid'];
-            $transaction_code = $eSewaData['transaction_code'] ?? null;
-        } else {
-            // Local simulation transaction code
-            $transaction_code = $transaction_uuid;
-        }
+try {
+    $pdo->beginTransaction();
 
-        if (!$transaction_uuid) {
-            throw new Exception("Missing transaction UUID.");
-        }
+    /*
+    |--------------------------------------------------------------------------
+    | Find all bookings of the same payment group
+    |--------------------------------------------------------------------------
+    | Very important:
+    | This updates D7 and D8 both, not only first booking_id.
+    */
 
-        /*
-        |--------------------------------------------------------------------------
-        | Booking Limit Check
-        |--------------------------------------------------------------------------
-        | Keeps your previous rule: max 10 confirmed movies per customer.
-        */
+    $allStmt = $pdo->prepare("
+        SELECT *
+        FROM bookings
+        WHERE customer_id = ?
+        AND transaction_uuid = ?
+        FOR UPDATE
+    ");
+    $allStmt->execute([currentUserId(), $transaction_uuid]);
+    $allBookings = $allStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $stmtLimit = $pdo->prepare("
-            SELECT COUNT(DISTINCT s.movie_id)
-            FROM bookings b
-            JOIN showtimes s ON b.showtime_id = s.showtime_id
-            WHERE b.customer_id = ?
-            AND b.status = 'Confirmed'
-        ");
-        $stmtLimit->execute([currentUserId()]);
-        $totalConfirmedMovies = $stmtLimit->fetchColumn();
+    /*
+    |--------------------------------------------------------------------------
+    | Fallback for old/broken booking rows
+    |--------------------------------------------------------------------------
+    */
 
-        if ($totalConfirmedMovies >= 10) {
-            $stmtThisMovie = $pdo->prepare("
-                SELECT COUNT(*)
-                FROM bookings b
-                JOIN showtimes s ON b.showtime_id = s.showtime_id
-                WHERE b.customer_id = ?
-                AND s.movie_id = ?
-                AND b.status = 'Confirmed'
-            ");
-            $stmtThisMovie->execute([currentUserId(), $mainBooking['movie_id'] ?? 0]);
-
-            if ($stmtThisMovie->fetchColumn() == 0) {
-                throw new Exception("You have reached the maximum booking limit of 10 movies.");
-            }
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Find Pending Bookings to Confirm
-        |--------------------------------------------------------------------------
-        | First try transaction_uuid.
-        | If transaction_uuid was not saved before payment, confirm current booking.
-        */
-
+    if (!$allBookings) {
         $allStmt = $pdo->prepare("
             SELECT *
             FROM bookings
-            WHERE transaction_uuid = ?
+            WHERE booking_id = ?
             AND customer_id = ?
-            AND status = 'Pending'
+            FOR UPDATE
         ");
-        $allStmt->execute([$transaction_uuid, currentUserId()]);
-        $allBookings = $allStmt->fetchAll();
-
-        // Fallback: confirm current booking if transaction_uuid was not saved earlier
-        if (!$allBookings) {
-            $allStmt = $pdo->prepare("
-                SELECT *
-                FROM bookings
-                WHERE booking_id = ?
-                AND customer_id = ?
-                AND status = 'Pending'
-            ");
-            $allStmt->execute([$booking_id, currentUserId()]);
-            $allBookings = $allStmt->fetchAll();
-        }
-
-        if (!$allBookings) {
-            throw new Exception("No pending booking found to confirm.");
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Confirm Booking, Seat and Payment
-        |--------------------------------------------------------------------------
-        */
-
-        foreach ($allBookings as $booking) {
-            // Update booking status
-            $updateBooking = $pdo->prepare("
-                UPDATE bookings 
-                SET 
-                    status = 'Confirmed',
-                    payment_status = 'paid',
-                    payment_ref = ?,
-                    transaction_uuid = ?
-                WHERE booking_id = ?
-                AND customer_id = ?
-            ");
-            $updateBooking->execute([
-                $transaction_uuid,
-                $transaction_uuid,
-                $booking['booking_id'],
-                currentUserId()
-            ]);
-
-            // Update seat status
-            $updateSeat = $pdo->prepare("
-                UPDATE seats 
-                SET 
-                    status = 'booked',
-                    reserved_until = NULL,
-                    reserved_by_customer_id = NULL
-                WHERE showtime_id = ?
-                AND seat_label = ?
-            ");
-            $updateSeat->execute([
-                $booking['showtime_id'],
-                $booking['seat_label']
-            ]);
-
-            // Update payment status
-            $updatePayment = $pdo->prepare("
-                UPDATE payments
-                SET 
-                    payment_status = 'Completed',
-                    transaction_uuid = ?,
-                    transaction_code = ?
-                WHERE booking_id = ?
-            ");
-            $updatePayment->execute([
-                $transaction_uuid,
-                $transaction_code,
-                $booking['booking_id']
-            ]);
-        }
-
-        $pdo->commit();
-
-        // Refresh main booking after update
-        $stmt->execute([$booking_id, currentUserId()]);
-        $mainBooking = $stmt->fetch();
-
-    } catch (Exception $e) {
-        if ($pdo->inTransaction()) {
-            $pdo->rollBack();
-        }
-
-        die('Update failed: ' . $e->getMessage());
+        $allStmt->execute([$booking_id, currentUserId()]);
+        $allBookings = $allStmt->fetchAll(PDO::FETCH_ASSOC);
     }
+
+    if (!$allBookings) {
+        throw new Exception("No booking rows found to confirm.");
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Update every seat booking row
+    |--------------------------------------------------------------------------
+    */
+
+    foreach ($allBookings as $booking) {
+        $updateBooking = $pdo->prepare("
+            UPDATE bookings
+            SET 
+                status = 'Confirmed',
+                payment_status = 'paid',
+                payment_ref = ?,
+                transaction_uuid = ?
+            WHERE booking_id = ?
+            AND customer_id = ?
+        ");
+        $updateBooking->execute([
+            $transaction_uuid,
+            $transaction_uuid,
+            $booking['booking_id'],
+            currentUserId()
+        ]);
+
+        $updateSeat = $pdo->prepare("
+            UPDATE seats
+            SET 
+                status = 'booked',
+                reserved_until = NULL,
+                reserved_by_customer_id = NULL
+            WHERE showtime_id = ?
+            AND seat_label = ?
+        ");
+        $updateSeat->execute([
+            $booking['showtime_id'],
+            $booking['seat_label']
+        ]);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Update payment table
+    |--------------------------------------------------------------------------
+    | Your payments table uses payment_status, not status.
+    */
+
+    $updatePayment = $pdo->prepare("
+        UPDATE payments
+        SET 
+            payment_status = 'Completed',
+            transaction_uuid = ?,
+            transaction_code = ?
+        WHERE transaction_uuid = ?
+        OR booking_id = ?
+    ");
+    $updatePayment->execute([
+        $transaction_uuid,
+        $transaction_code,
+        $transaction_uuid,
+        $booking_id
+    ]);
+
+    $pdo->commit();
+
+} catch (Exception $e) {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+
+    die("Update failed: " . $e->getMessage());
 }
 
-// Fetch all confirmed seats for this booking/payment
-$seatStmt = $pdo->prepare("
-    SELECT seat_label, amount 
-    FROM bookings 
-    WHERE customer_id = ?
-    AND status = 'Confirmed'
-    AND (
-        payment_ref = ?
-        OR transaction_uuid = ?
-        OR booking_id = ?
-    )
-");
-$seatStmt->execute([
-    currentUserId(),
-    $transaction_uuid,
-    $transaction_uuid,
-    $booking_id
-]);
-$allSeats = $seatStmt->fetchAll();
+/*
+|--------------------------------------------------------------------------
+| Refresh Main Booking
+|--------------------------------------------------------------------------
+*/
 
-// Fallback: if allSeats is still empty, show current booking seat
-if (!$allSeats && $mainBooking['status'] === 'Confirmed') {
+$stmt->execute([$booking_id, currentUserId()]);
+$mainBooking = $stmt->fetch(PDO::FETCH_ASSOC);
+
+/*
+|--------------------------------------------------------------------------
+| Fetch All Confirmed Seats of This Transaction
+|--------------------------------------------------------------------------
+*/
+
+$seatStmt = $pdo->prepare("
+    SELECT seat_label, amount
+    FROM bookings
+    WHERE customer_id = ?
+    AND transaction_uuid = ?
+    AND status = 'Confirmed'
+    ORDER BY booking_id ASC
+");
+$seatStmt->execute([currentUserId(), $transaction_uuid]);
+$allSeats = $seatStmt->fetchAll(PDO::FETCH_ASSOC);
+
+if (!$allSeats) {
     $allSeats = [
         [
             'seat_label' => $mainBooking['seat_label'],
@@ -292,24 +260,17 @@ include 'includes/header.php';
                 </svg>
             </div>
 
-            <?php if ($mainBooking['status'] === 'Confirmed'): ?>
-                <h1 style="font-size: var(--font-size-3xl); font-weight: 800; margin-bottom: var(--spacing-sm);">
-                    Booking Confirmed!
-                </h1>
-                <p class="text-muted">Your ticket has been booked successfully. Enjoy your movie!</p>
-            <?php else: ?>
-                <h1 style="font-size: var(--font-size-3xl); font-weight: 800; margin-bottom: var(--spacing-sm);">
-                    Booking Not Confirmed
-                </h1>
-                <p class="text-muted">Your booking status is still <?= htmlspecialchars($mainBooking['status']) ?>.</p>
-            <?php endif; ?>
+            <h1 style="font-size: var(--font-size-3xl); font-weight: 800; margin-bottom: var(--spacing-sm);">
+                Booking Confirmed!
+            </h1>
+            <p class="text-muted">Your ticket has been booked successfully. Enjoy your movie!</p>
         </div>
 
-        <!-- Ticket Visual -->
         <div class="ticket">
             <div class="ticket-main">
                 <div class="ticket-movie-info">
                     <img src="<?= getMoviePoster($mainBooking['poster']) ?>" alt="<?= htmlspecialchars($mainBooking['title']) ?>" class="ticket-poster">
+
                     <div>
                         <div class="ticket-badge">E-TICKET</div>
                         <h2 class="ticket-title"><?= htmlspecialchars($mainBooking['title']) ?></h2>
@@ -325,30 +286,33 @@ include 'includes/header.php';
                         <div class="ticket-label">DATE</div>
                         <div class="ticket-value"><?= date('D, M d, Y', strtotime($mainBooking['show_date'])) ?></div>
                     </div>
+
                     <div class="ticket-item">
                         <div class="ticket-label">TIME</div>
                         <div class="ticket-value"><?= date('h:i A', strtotime($mainBooking['show_time'])) ?></div>
                     </div>
+
                     <div class="ticket-item">
                         <div class="ticket-label">SCREEN</div>
                         <div class="ticket-value"><?= htmlspecialchars($mainBooking['screen']) ?></div>
                     </div>
+
                     <div class="ticket-item">
                         <div class="ticket-label">SEATS</div>
                         <div class="ticket-value">
                             <?= htmlspecialchars(implode(', ', array_column($allSeats, 'seat_label'))) ?>
                         </div>
                     </div>
+
                     <div class="ticket-item">
                         <div class="ticket-label">STATUS</div>
-                        <div class="ticket-value">
-                            <?= htmlspecialchars($mainBooking['status']) ?>
-                        </div>
+                        <div class="ticket-value">Confirmed</div>
                     </div>
+
                     <div class="ticket-item">
                         <div class="ticket-label">PAYMENT REF</div>
                         <div class="ticket-value" style="font-size: 12px;">
-                            <?= htmlspecialchars($transaction_uuid ?? $mainBooking['payment_ref'] ?? 'N/A') ?>
+                            <?= htmlspecialchars($transaction_uuid) ?>
                         </div>
                     </div>
                 </div>
@@ -361,6 +325,7 @@ include 'includes/header.php';
                         #TK-<?= str_pad($booking_id, 6, '0', STR_PAD_LEFT) ?>
                     </div>
                 </div>
+
                 <div class="ticket-price">
                     NPR <?= number_format(array_sum(array_column($allSeats, 'amount')), 2) ?>
                 </div>
@@ -369,12 +334,11 @@ include 'includes/header.php';
 
         <div style="display: flex; gap: var(--spacing-md); justify-content: center; margin-top: var(--spacing-2xl);">
             <a href="dashboard.php" class="btn btn-outline">My Bookings</a>
+
             <button onclick="window.print()" class="btn btn-primary">
-                <svg style="width: 18px; height: 18px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
-                </svg>
                 Print Ticket
             </button>
+
             <a href="index.php" class="btn btn-secondary">Back to Home</a>
         </div>
     </div>
@@ -397,7 +361,8 @@ include 'includes/header.php';
     position: relative;
 }
 
-.ticket-main::before, .ticket-main::after {
+.ticket-main::before,
+.ticket-main::after {
     content: '';
     position: absolute;
     right: -10px;
@@ -407,12 +372,12 @@ include 'includes/header.php';
     border-radius: 50%;
 }
 
-.ticket-main::before { 
-    top: -10px; 
+.ticket-main::before {
+    top: -10px;
 }
 
-.ticket-main::after { 
-    bottom: -10px; 
+.ticket-main::after {
+    bottom: -10px;
 }
 
 .ticket-side {
@@ -492,41 +457,44 @@ include 'includes/header.php';
 }
 
 @media (max-width: 768px) {
-    .ticket { 
-        flex-direction: column; 
+    .ticket {
+        flex-direction: column;
     }
 
-    .ticket-main { 
-        border-right: none; 
-        border-bottom: 2px dashed var(--gray-200); 
+    .ticket-main {
+        border-right: none;
+        border-bottom: 2px dashed var(--gray-200);
     }
 
-    .ticket-main::before, 
-    .ticket-main::after { 
-        display: none; 
+    .ticket-main::before,
+    .ticket-main::after {
+        display: none;
     }
 
-    .ticket-side { 
-        width: 100%; 
+    .ticket-side {
+        width: 100%;
     }
 }
 
 @media print {
-    .header, .btn, .nav, footer { 
-        display: none !important; 
+    .header,
+    .btn,
+    .nav,
+    footer {
+        display: none !important;
     }
 
-    body { 
-        background: white; 
+    body {
+        background: white;
     }
 
-    .container { 
-        padding: 0; 
+    .container {
+        padding: 0;
     }
 
-    .ticket { 
-        box-shadow: none; 
-        border: 1px solid #eee; 
+    .ticket {
+        box-shadow: none;
+        border: 1px solid #eee;
     }
 }
 </style>
