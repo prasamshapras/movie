@@ -6,11 +6,23 @@ if (!isLoggedIn()) {
     exit;
 }
 
+if (isAdminLoggedIn()) {
+    $_SESSION['error'] = "Admin cannot book tickets. Please use a customer account.";
+    header("Location: admin/dashboard.php");
+    exit;
+}
+
 $booking_id = intval($_GET['booking_id'] ?? 0);
 
 if (!$booking_id) {
     die('Invalid booking.');
 }
+
+/*
+|--------------------------------------------------------------------------
+| Fetch Booking
+|--------------------------------------------------------------------------
+*/
 
 $stmt = $pdo->prepare("
     SELECT b.*, m.title
@@ -21,40 +33,82 @@ $stmt = $pdo->prepare("
     AND b.customer_id = ?
 ");
 $stmt->execute([$booking_id, currentUserId()]);
-$booking = $stmt->fetch();
+$booking = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$booking) {
     die('Booking not found.');
 }
 
+/*
+|--------------------------------------------------------------------------
+| IMPORTANT FIX
+|--------------------------------------------------------------------------
+| Do not create new transaction_uuid here.
+| Use the transaction_uuid already created in booking_process.php.
+*/
+
+$transaction_uuid = $booking['transaction_uuid'] ?? '';
+
+if (!$transaction_uuid) {
+    die('Transaction UUID missing from booking. Please create booking again.');
+}
+
+/*
+|--------------------------------------------------------------------------
+| Fetch All Seats Under Same Transaction UUID
+|--------------------------------------------------------------------------
+*/
+
+$seatStmt = $pdo->prepare("
+    SELECT seat_label, amount
+    FROM bookings
+    WHERE customer_id = ?
+    AND transaction_uuid = ?
+    AND status = 'Pending'
+    ORDER BY booking_id ASC
+");
+$seatStmt->execute([currentUserId(), $transaction_uuid]);
+$groupSeats = $seatStmt->fetchAll(PDO::FETCH_ASSOC);
+
+if (!$groupSeats) {
+    die('No pending seats found for this payment.');
+}
+
+$seatLabels = array_column($groupSeats, 'seat_label');
+$totalAmountRaw = array_sum(array_column($groupSeats, 'amount'));
+
+/*
+|--------------------------------------------------------------------------
+| Fetch Payment Amount
+|--------------------------------------------------------------------------
+*/
+
 $payStmt = $pdo->prepare("
     SELECT amount
     FROM payments
-    WHERE booking_id = ?
+    WHERE transaction_uuid = ?
     ORDER BY payment_id DESC
     LIMIT 1
 ");
-$payStmt->execute([$booking_id]);
-$totalAmount = $payStmt->fetchColumn();
+$payStmt->execute([$transaction_uuid]);
+$paymentAmount = $payStmt->fetchColumn();
 
-if (!$totalAmount) {
-    $totalAmount = $booking['amount'];
+if (!$paymentAmount) {
+    $paymentAmount = $totalAmountRaw;
 }
 
-$amount = number_format((float)$totalAmount, 2, '.', '');
+$amount = number_format((float)$paymentAmount, 2, '.', '');
 $taxAmount = "0";
 $serviceCharge = "0";
 $deliveryCharge = "0";
 $totalAmount = $amount;
 
-$transaction_uuid = "TXN" . $booking_id . time();
-
 $signature = generateEsewaSignature($totalAmount, $transaction_uuid);
 
 $success_url = BASE_URL . "/success.php?booking_id=" . $booking_id . "&transaction_uuid=" . urlencode($transaction_uuid);
-$failure_url = BASE_URL . "/failure.php?booking_id=" . $booking_id;
+$failure_url = BASE_URL . "/failure.php?booking_id=" . $booking_id . "&transaction_uuid=" . urlencode($transaction_uuid);
 
-$local_success_url = "success.php?booking_id=" . $booking_id . "&transaction_uuid=LOCALTEST" . time();
+$local_success_url = "success.php?booking_id=" . $booking_id . "&transaction_uuid=" . urlencode($transaction_uuid);
 
 include 'includes/header.php';
 ?>
@@ -63,10 +117,18 @@ include 'includes/header.php';
     <h2>Payment Page</h2>
 
     <p><strong>Movie:</strong> <?= htmlspecialchars($booking['title']) ?></p>
-    <p><strong>Seat:</strong> <?= htmlspecialchars($booking['seat_label']) ?></p>
-    <p><strong>Amount:</strong> NPR <?= htmlspecialchars($amount) ?></p>
 
-    <form action="<?= ESEWA_PAYMENT_URL ?>" method="POST">
+    <p>
+        <strong>Seats:</strong>
+        <?= htmlspecialchars(implode(', ', $seatLabels)) ?>
+    </p>
+
+    <p>
+        <strong>Total Amount:</strong>
+        NPR <?= htmlspecialchars($amount) ?>
+    </p>
+
+    <form action="<?= htmlspecialchars(ESEWA_PAYMENT_URL) ?>" method="POST">
         <input type="hidden" name="amount" value="<?= htmlspecialchars($amount) ?>">
         <input type="hidden" name="tax_amount" value="<?= htmlspecialchars($taxAmount) ?>">
         <input type="hidden" name="total_amount" value="<?= htmlspecialchars($totalAmount) ?>">
@@ -79,14 +141,16 @@ include 'includes/header.php';
         <input type="hidden" name="signed_field_names" value="total_amount,transaction_uuid,product_code">
         <input type="hidden" name="signature" value="<?= htmlspecialchars($signature) ?>">
 
-        <button class="btn esewa" type="submit" style="background: #60bb46; color: white; width: 100%; padding: 14px; border-radius: 8px; border: none; cursor: pointer; font-size: 16px; font-weight: bold;">Pay with eSewa Sandbox</button>
+        <button class="btn esewa" type="submit" style="background: #60bb46; color: white; width: 100%; padding: 14px; border-radius: 8px; border: none; cursor: pointer; font-size: 16px; font-weight: bold;">
+            Pay with eSewa Sandbox
+        </button>
     </form>
 
     <a class="btn" href="<?= htmlspecialchars($local_success_url) ?>" style="display: block; margin-top: 15px; background: #0b5cff; color: white; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold;">
         Simulate Successful Payment
     </a>
 
-    <a class="btn btn-muted" href="failure.php?booking_id=<?= $booking_id ?>" style="display: none; margin-top: 15px; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold;">
+    <a class="btn btn-muted" href="<?= htmlspecialchars($failure_url) ?>" style="display: none; margin-top: 15px; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold;">
         Simulate Failed Payment
     </a>
 

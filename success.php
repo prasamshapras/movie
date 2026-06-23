@@ -14,8 +14,6 @@ if (isAdminLoggedIn()) {
 }
 
 $booking_id = intval($_GET['booking_id'] ?? 0);
-$transaction_uuid = $_GET['transaction_uuid'] ?? null;
-$transaction_code = null;
 
 if (!$booking_id) {
     die('Invalid booking.');
@@ -52,14 +50,27 @@ if (!$mainBooking) {
 
 /*
 |--------------------------------------------------------------------------
-| Get Transaction UUID
+| Important Fix
 |--------------------------------------------------------------------------
-| For local simulation, transaction_uuid comes from URL.
-| For eSewa real success, transaction_uuid comes from data.
-| If not in URL, use booking table transaction_uuid.
+| Use transaction_uuid from database, not URL.
+| This transaction_uuid is same for all selected seats.
 */
 
-if (isset($_GET['data'])) {
+$booking_group_uuid = $mainBooking['transaction_uuid'] ?? '';
+
+if (!$booking_group_uuid) {
+    die("Booking group transaction UUID missing in database.");
+}
+
+/*
+|--------------------------------------------------------------------------
+| Payment Reference
+|--------------------------------------------------------------------------
+*/
+
+$payment_ref = $booking_group_uuid;
+
+if (isset($_GET['data']) && function_exists('verifyEsewaResponse')) {
     $eSewaData = verifyEsewaResponse($_GET['data']);
 
     if (!$eSewaData) {
@@ -70,29 +81,18 @@ if (isset($_GET['data'])) {
         die("Payment is not complete.");
     }
 
-    if (($eSewaData['product_code'] ?? '') !== ESEWA_PRODUCT_CODE) {
-        die("Invalid eSewa product code.");
+    if (defined('ESEWA_PRODUCT_CODE')) {
+        if (($eSewaData['product_code'] ?? '') !== ESEWA_PRODUCT_CODE) {
+            die("Invalid eSewa product code.");
+        }
     }
 
-    $transaction_uuid = $eSewaData['transaction_uuid'] ?? null;
-    $transaction_code = $eSewaData['transaction_code'] ?? null;
-}
-
-if (!$transaction_uuid && !empty($mainBooking['transaction_uuid'])) {
-    $transaction_uuid = $mainBooking['transaction_uuid'];
-}
-
-if (!$transaction_code) {
-    $transaction_code = $transaction_uuid;
-}
-
-if (!$transaction_uuid) {
-    die("Transaction UUID missing. Cannot confirm booking group.");
+    $payment_ref = $eSewaData['transaction_code'] ?? $booking_group_uuid;
 }
 
 /*
 |--------------------------------------------------------------------------
-| Confirm All Seats Under Same Transaction UUID
+| Confirm All Bookings Under Same transaction_uuid
 |--------------------------------------------------------------------------
 */
 
@@ -101,10 +101,8 @@ try {
 
     /*
     |--------------------------------------------------------------------------
-    | Find all bookings of the same payment group
+    | Fetch all booking rows in same group
     |--------------------------------------------------------------------------
-    | Very important:
-    | This updates D7 and D8 both, not only first booking_id.
     */
 
     $allStmt = $pdo->prepare("
@@ -114,91 +112,76 @@ try {
         AND transaction_uuid = ?
         FOR UPDATE
     ");
-    $allStmt->execute([currentUserId(), $transaction_uuid]);
+    $allStmt->execute([currentUserId(), $booking_group_uuid]);
     $allBookings = $allStmt->fetchAll(PDO::FETCH_ASSOC);
 
+    if (!$allBookings) {
+        throw new Exception("No booking rows found for this transaction group.");
+    }
+
     /*
     |--------------------------------------------------------------------------
-    | Fallback for old/broken booking rows
+    | Confirm all selected seats together
     |--------------------------------------------------------------------------
     */
 
-    if (!$allBookings) {
-        $allStmt = $pdo->prepare("
-            SELECT *
-            FROM bookings
-            WHERE booking_id = ?
-            AND customer_id = ?
-            FOR UPDATE
-        ");
-        $allStmt->execute([$booking_id, currentUserId()]);
-        $allBookings = $allStmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    if (!$allBookings) {
-        throw new Exception("No booking rows found to confirm.");
-    }
+    $updateBookings = $pdo->prepare("
+        UPDATE bookings
+        SET 
+            status = 'Confirmed',
+            payment_status = 'Paid',
+            payment_ref = ?
+        WHERE customer_id = ?
+        AND transaction_uuid = ?
+    ");
+    $updateBookings->execute([
+        $payment_ref,
+        currentUserId(),
+        $booking_group_uuid
+    ]);
 
     /*
     |--------------------------------------------------------------------------
-    | Update every seat booking row
+    | Mark all seats as booked
     |--------------------------------------------------------------------------
     */
 
-    foreach ($allBookings as $booking) {
-        $updateBooking = $pdo->prepare("
-            UPDATE bookings
-            SET 
-                status = 'Confirmed',
-                payment_status = 'paid',
-                payment_ref = ?,
-                transaction_uuid = ?
-            WHERE booking_id = ?
-            AND customer_id = ?
-        ");
-        $updateBooking->execute([
-            $transaction_uuid,
-            $transaction_uuid,
-            $booking['booking_id'],
-            currentUserId()
-        ]);
-
-        $updateSeat = $pdo->prepare("
-            UPDATE seats
-            SET 
-                status = 'booked',
-                reserved_until = NULL,
-                reserved_by_customer_id = NULL
-            WHERE showtime_id = ?
-            AND seat_label = ?
-        ");
-        $updateSeat->execute([
-            $booking['showtime_id'],
-            $booking['seat_label']
-        ]);
-    }
+    $updateSeats = $pdo->prepare("
+        UPDATE seats s
+        JOIN bookings b
+            ON s.showtime_id = b.showtime_id
+            AND s.seat_label = b.seat_label
+        SET
+            s.status = 'booked',
+            s.reserved_until = NULL,
+            s.reserved_by_customer_id = NULL
+        WHERE b.customer_id = ?
+        AND b.transaction_uuid = ?
+    ");
+    $updateSeats->execute([
+        currentUserId(),
+        $booking_group_uuid
+    ]);
 
     /*
     |--------------------------------------------------------------------------
-    | Update payment table
+    | Update payment row
     |--------------------------------------------------------------------------
-    | Your payments table uses payment_status, not status.
+    | Simple version using your existing payments table.
     */
 
     $updatePayment = $pdo->prepare("
         UPDATE payments
-        SET 
+        SET
             payment_status = 'Completed',
-            transaction_uuid = ?,
-            transaction_code = ?
-        WHERE transaction_uuid = ?
-        OR booking_id = ?
+            transaction_uuid = ?
+        WHERE booking_id = ?
+        OR transaction_uuid = ?
     ");
     $updatePayment->execute([
-        $transaction_uuid,
-        $transaction_code,
-        $transaction_uuid,
-        $booking_id
+        $booking_group_uuid,
+        $booking_id,
+        $booking_group_uuid
     ]);
 
     $pdo->commit();
@@ -208,7 +191,7 @@ try {
         $pdo->rollBack();
     }
 
-    die("Update failed: " . $e->getMessage());
+    die("Update failed: " . htmlspecialchars($e->getMessage()));
 }
 
 /*
@@ -222,7 +205,7 @@ $mainBooking = $stmt->fetch(PDO::FETCH_ASSOC);
 
 /*
 |--------------------------------------------------------------------------
-| Fetch All Confirmed Seats of This Transaction
+| Fetch All Confirmed Seats Of Same Booking Group
 |--------------------------------------------------------------------------
 */
 
@@ -234,7 +217,7 @@ $seatStmt = $pdo->prepare("
     AND status = 'Confirmed'
     ORDER BY booking_id ASC
 ");
-$seatStmt->execute([currentUserId(), $transaction_uuid]);
+$seatStmt->execute([currentUserId(), $booking_group_uuid]);
 $allSeats = $seatStmt->fetchAll(PDO::FETCH_ASSOC);
 
 if (!$allSeats) {
@@ -263,17 +246,28 @@ include 'includes/header.php';
             <h1 style="font-size: var(--font-size-3xl); font-weight: 800; margin-bottom: var(--spacing-sm);">
                 Booking Confirmed!
             </h1>
-            <p class="text-muted">Your ticket has been booked successfully. Enjoy your movie!</p>
+
+            <p class="text-muted">
+                Your ticket has been booked successfully. Enjoy your movie!
+            </p>
         </div>
 
         <div class="ticket">
             <div class="ticket-main">
                 <div class="ticket-movie-info">
-                    <img src="<?= getMoviePoster($mainBooking['poster']) ?>" alt="<?= htmlspecialchars($mainBooking['title']) ?>" class="ticket-poster">
+                    <img 
+                        src="<?= getMoviePoster($mainBooking['poster']) ?>" 
+                        alt="<?= htmlspecialchars($mainBooking['title']) ?>" 
+                        class="ticket-poster"
+                    >
 
                     <div>
                         <div class="ticket-badge">E-TICKET</div>
-                        <h2 class="ticket-title"><?= htmlspecialchars($mainBooking['title']) ?></h2>
+
+                        <h2 class="ticket-title">
+                            <?= htmlspecialchars($mainBooking['title']) ?>
+                        </h2>
+
                         <div class="ticket-meta">
                             <span><?= htmlspecialchars($mainBooking['language']) ?></span> • 
                             <span><?= htmlspecialchars($mainBooking['duration']) ?> Min</span>
@@ -284,17 +278,23 @@ include 'includes/header.php';
                 <div class="ticket-grid">
                     <div class="ticket-item">
                         <div class="ticket-label">DATE</div>
-                        <div class="ticket-value"><?= date('D, M d, Y', strtotime($mainBooking['show_date'])) ?></div>
+                        <div class="ticket-value">
+                            <?= date('D, M d, Y', strtotime($mainBooking['show_date'])) ?>
+                        </div>
                     </div>
 
                     <div class="ticket-item">
                         <div class="ticket-label">TIME</div>
-                        <div class="ticket-value"><?= date('h:i A', strtotime($mainBooking['show_time'])) ?></div>
+                        <div class="ticket-value">
+                            <?= date('h:i A', strtotime($mainBooking['show_time'])) ?>
+                        </div>
                     </div>
 
                     <div class="ticket-item">
                         <div class="ticket-label">SCREEN</div>
-                        <div class="ticket-value"><?= htmlspecialchars($mainBooking['screen']) ?></div>
+                        <div class="ticket-value">
+                            <?= htmlspecialchars($mainBooking['screen']) ?>
+                        </div>
                     </div>
 
                     <div class="ticket-item">
@@ -312,7 +312,7 @@ include 'includes/header.php';
                     <div class="ticket-item">
                         <div class="ticket-label">PAYMENT REF</div>
                         <div class="ticket-value" style="font-size: 12px;">
-                            <?= htmlspecialchars($transaction_uuid) ?>
+                            <?= htmlspecialchars($payment_ref) ?>
                         </div>
                     </div>
                 </div>
@@ -339,7 +339,9 @@ include 'includes/header.php';
                 Print Ticket
             </button>
 
-            <a href="index.php" class="btn btn-secondary">Back to Home</a>
+            <a href="index.php" class="btn btn-secondary">
+                Back to Home
+            </a>
         </div>
     </div>
 </div>
