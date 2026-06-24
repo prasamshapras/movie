@@ -2,7 +2,7 @@
 require_once '../includes/config.php';
 require_once '../includes/automation.php';
 
-if(!isAdminLoggedIn()) {
+if (!isAdminLoggedIn()) {
     header('Location: ../login.php');
     exit;
 }
@@ -18,6 +18,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= $page_title ?? 'Admin Panel' ?> - Ticketly</title>
+
     <style>
         * {
             margin: 0;
@@ -230,6 +231,11 @@ $current_page = basename($_SERVER['PHP_SELF']);
             background: #dc2626;
         }
 
+        .btn-sm {
+            padding: 0.25rem 0.75rem;
+            font-size: 0.75rem;
+        }
+
         .btn-group {
             display: flex;
             gap: 0.75rem;
@@ -291,7 +297,6 @@ $current_page = basename($_SERVER['PHP_SELF']);
             margin-right: 1rem;
         }
 
-        /* Search Section Styles */
         .search-section {
             background: white;
             border-radius: 0.75rem;
@@ -299,24 +304,29 @@ $current_page = basename($_SERVER['PHP_SELF']);
             margin-bottom: 1.5rem;
             overflow: hidden;
         }
+
         .search-header {
             padding: 1rem 1.5rem;
             border-bottom: 1px solid #e2e8f0;
             background: #f8fafc;
         }
+
         .search-body {
             padding: 1.5rem;
         }
+
         .search-form {
             display: flex;
             flex-wrap: wrap;
             gap: 1rem;
             align-items: flex-end;
         }
+
         .search-group {
             flex: 1;
             min-width: 200px;
         }
+
         .search-label {
             display: block;
             margin-bottom: 0.5rem;
@@ -324,12 +334,20 @@ $current_page = basename($_SERVER['PHP_SELF']);
             color: #475569;
             font-size: 0.875rem;
         }
-        .search-input, .search-select {
+
+        .search-input,
+        .search-select {
             width: 100%;
             padding: 0.625rem 1rem;
             border: 1px solid #e2e8f0;
             border-radius: 0.5rem;
             font-size: 0.875rem;
+        }
+
+        input,
+        select,
+        textarea {
+            font-family: inherit;
         }
 
         @media (max-width: 768px) {
@@ -351,6 +369,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
         }
     </style>
 </head>
+
 <body>
     <div class="admin-container">
         <aside class="admin-sidebar" id="sidebar">
@@ -358,6 +377,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                 <h2>Ticketly</h2>
                 <p>Administration Panel</p>
             </div>
+
             <nav class="sidebar-nav">
                 <a href="dashboard.php" class="nav-item <?= $current_page == 'dashboard.php' ? 'active' : '' ?>">
                     <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -365,24 +385,35 @@ $current_page = basename($_SERVER['PHP_SELF']);
                     </svg>
                     Dashboard
                 </a>
-                <a href="movies.php" class="nav-item <?= $current_page == 'movies.php' || $current_page == 'edit_movie.php' ? 'active' : '' ?>">
+
+                <a href="movies.php" class="nav-item <?= ($current_page == 'movies.php' || $current_page == 'edit_movie.php') ? 'active' : '' ?>">
                     <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/>
                     </svg>
                     Movies
                 </a>
+
                 <a href="add_movie.php" class="nav-item <?= $current_page == 'add_movie.php' ? 'active' : '' ?>">
                     <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                     </svg>
                     Add Movie
                 </a>
+
                 <a href="add_showtime.php" class="nav-item <?= $current_page == 'add_showtime.php' ? 'active' : '' ?>">
                     <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
                     </svg>
                     Add Showtime
                 </a>
+
+                <a href="showtimes.php" class="nav-item <?= ($current_page == 'showtimes.php' || $current_page == 'edit_showtime.php') ? 'active' : '' ?>">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    Manage Showtimes
+                </a>
+
                 <a href="bookings.php" class="nav-item <?= $current_page == 'bookings.php' ? 'active' : '' ?>">
                     <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
@@ -398,8 +429,11 @@ $current_page = basename($_SERVER['PHP_SELF']);
                     <button class="menu-toggle" id="menuToggle">☰</button>
                     <h1><?= $page_title ?? 'Dashboard' ?></h1>
                 </div>
+
                 <div>
-                    <span style="color: #64748b; margin-right: 1rem;">Welcome, <?= htmlspecialchars($_SESSION['username'] ?? 'Admin') ?></span>
+                    <span style="color: #64748b; margin-right: 1rem;">
+                        Welcome, <?= htmlspecialchars($_SESSION['username'] ?? 'Admin') ?>
+                    </span>
                     <a href="../logout.php" class="btn btn-outline">Logout</a>
                 </div>
             </div>

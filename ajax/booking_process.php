@@ -1,17 +1,24 @@
 <?php
 require_once '../includes/config.php';
 
+date_default_timezone_set('Asia/Kathmandu');
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: ../index.php');
     exit;
 }
 
-$movie_id     = intval($_POST['movie_id'] ?? 0);
-$showtime_id  = intval($_POST['showtime_id'] ?? 0);
-$selected     = trim($_POST['selected_seats'] ?? '');
+$movie_id = intval($_POST['movie_id'] ?? 0);
+$showtime_id = intval($_POST['showtime_id'] ?? 0);
+$selected = trim($_POST['selected_seats'] ?? '');
+
+$today = date('Y-m-d');
+$currentTime = date('H:i:s');
+$nowDateTime = date('Y-m-d H:i:s');
 
 if (!isLoggedIn()) {
-    $_SESSION['after_login_redirect'] = "seat_selection.php?movie_id=" . $movie_id . "&showtime_id=" . $showtime_id;
+    $_SESSION['after_login_redirect'] = "movie.php?id=" . $movie_id . "&showtime=" . $showtime_id;
+    $_SESSION['redirect_after_login'] = "movie.php?id=" . $movie_id . "&showtime=" . $showtime_id;
     header('Location: ../login.php');
     exit;
 }
@@ -32,7 +39,6 @@ $customer_id = currentUserId();
 |--------------------------------------------------------------------------
 | Clean selected seats
 |--------------------------------------------------------------------------
-| Example selected_seats value: A1,C2,D5
 */
 
 $seatLabels = array_values(
@@ -84,8 +90,33 @@ if ($totalConfirmedMovies >= 10) {
 
 /*
 |--------------------------------------------------------------------------
-| Validate Showtime and Price
+| Validate Movie
 |--------------------------------------------------------------------------
+*/
+
+$movieCheck = $pdo->prepare("
+    SELECT COUNT(*)
+    FROM movies
+    WHERE movie_id = ?
+");
+$movieCheck->execute([$movie_id]);
+
+if ($movieCheck->fetchColumn() == 0) {
+    die('Invalid movie.');
+}
+
+/*
+|--------------------------------------------------------------------------
+| Validate Showtime
+|--------------------------------------------------------------------------
+| This allows:
+| - today ko future showtime
+| - tomorrow ko showtime
+| - parsi/future showtime
+|
+| This blocks:
+| - today ko already passed showtime
+| - wrong movie/showtime combination
 */
 
 $priceStmt = $pdo->prepare("
@@ -93,12 +124,26 @@ $priceStmt = $pdo->prepare("
     FROM showtimes
     WHERE showtime_id = ?
     AND movie_id = ?
+    AND (
+        show_date > ?
+        OR (
+            show_date = ?
+            AND show_time > ?
+        )
+    )
 ");
-$priceStmt->execute([$showtime_id, $movie_id]);
+$priceStmt->execute([
+    $showtime_id,
+    $movie_id,
+    $today,
+    $today,
+    $currentTime
+]);
+
 $base_price = $priceStmt->fetchColumn();
 
 if (!$base_price) {
-    die('Invalid showtime.');
+    die('This showtime has already passed or is invalid. Please select another available showtime.');
 }
 
 $base_price = (float)$base_price;
@@ -108,8 +153,7 @@ $totalAmount = count($seatLabels) * $base_price;
 |--------------------------------------------------------------------------
 | One Transaction UUID For All Selected Seats
 |--------------------------------------------------------------------------
-| This is the main fix.
-| If user selects A1 and C2, both booking rows will have same transaction_uuid.
+| If user selects A1 and C2, both booking rows get same transaction_uuid.
 */
 
 $transaction_uuid = "TXN-" . $customer_id . "-" . time() . "-" . bin2hex(random_bytes(4));
@@ -119,7 +163,7 @@ try {
 
     /*
     |--------------------------------------------------------------------------
-    | Release Expired Reservations
+    | Release Expired Seat Reservations
     |--------------------------------------------------------------------------
     */
 
@@ -131,13 +175,13 @@ try {
             reserved_by_customer_id = NULL
         WHERE status = 'reserved'
         AND reserved_until IS NOT NULL
-        AND reserved_until < NOW()
+        AND reserved_until < ?
     ");
-    $releaseExpired->execute();
+    $releaseExpired->execute([$nowDateTime]);
 
     /*
     |--------------------------------------------------------------------------
-    | Check Seat Availability With Lock
+    | Check Selected Seats
     |--------------------------------------------------------------------------
     */
 
@@ -153,18 +197,20 @@ try {
         UPDATE seats
         SET
             status = 'reserved',
-            reserved_until = DATE_ADD(NOW(), INTERVAL 2 MINUTE),
+            reserved_until = ?,
             reserved_by_customer_id = ?
         WHERE showtime_id = ?
         AND seat_label = ?
     ");
+
+    $reservedUntil = date('Y-m-d H:i:s', time() + 120);
 
     foreach ($seatLabels as $seat) {
         $checkSeat->execute([$showtime_id, $seat]);
         $seatRow = $checkSeat->fetch(PDO::FETCH_ASSOC);
 
         if (!$seatRow) {
-            throw new Exception("Seat $seat does not exist.");
+            throw new Exception("Seat $seat does not exist for this showtime.");
         }
 
         if ($seatRow['status'] === 'booked') {
@@ -180,12 +226,19 @@ try {
 
         /*
         |--------------------------------------------------------------------------
-        | Reserve available seat for current customer
+        | Reserve available seat again for current user before payment
         |--------------------------------------------------------------------------
         */
 
-        if ($seatRow['status'] === 'available') {
+        if (
+            $seatRow['status'] === 'available' ||
+            (
+                $seatRow['status'] === 'reserved' &&
+                intval($seatRow['reserved_by_customer_id']) === intval($customer_id)
+            )
+        ) {
             $reserveSeat->execute([
+                $reservedUntil,
                 $customer_id,
                 $showtime_id,
                 $seat
@@ -197,10 +250,6 @@ try {
     |--------------------------------------------------------------------------
     | Insert One Booking Row Per Seat
     |--------------------------------------------------------------------------
-    | All selected seats share the same transaction_uuid.
-    | Example:
-    | A1 -> Pending -> TXN-123
-    | C2 -> Pending -> TXN-123
     */
 
     $insertBooking = $pdo->prepare("
@@ -249,16 +298,13 @@ try {
         throw new Exception('Booking could not be created.');
     }
 
+    $firstBookingId = $bookingIds[0];
+
     /*
     |--------------------------------------------------------------------------
     | Insert One Payment Row For Whole Seat Group
     |--------------------------------------------------------------------------
-    | Payment amount is total of all selected seats.
-    | Payment is linked to first booking_id only,
-    | but transaction_uuid represents the full group.
     */
-
-    $firstBookingId = $bookingIds[0];
 
     $insertPayment = $pdo->prepare("
         INSERT INTO payments
@@ -286,14 +332,6 @@ try {
     ]);
 
     $pdo->commit();
-
-    /*
-    |--------------------------------------------------------------------------
-    | Redirect To Payment Page
-    |--------------------------------------------------------------------------
-    | Send both booking_id and transaction_uuid.
-    | payment.php must use this same transaction_uuid.
-    */
 
     header(
         "Location: ../payment.php?booking_id=" . $firstBookingId .

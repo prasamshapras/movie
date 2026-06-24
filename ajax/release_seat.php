@@ -1,5 +1,8 @@
 <?php
 require '../includes/config.php';
+
+date_default_timezone_set('Asia/Kathmandu');
+
 header('Content-Type: application/json');
 
 if (!isLoggedIn()) {
@@ -8,7 +11,10 @@ if (!isLoggedIn()) {
 }
 
 if (isAdminLoggedIn()) {
-    echo json_encode(['success' => false, 'message' => 'Admin cannot manage reservations.']);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Admin cannot manage reservations.'
+    ]);
     exit;
 }
 
@@ -23,13 +29,13 @@ if (!$showtime_id || !$seat_label) {
 
 $stmt = $pdo->prepare("
     UPDATE seats
-    SET status='available',
-        reserved_until=NULL,
-        reserved_by_customer_id=NULL
-    WHERE showtime_id=?
-    AND seat_label=?
-    AND status='reserved'
-    AND reserved_by_customer_id=?
+    SET status = 'available',
+        reserved_until = NULL,
+        reserved_by_customer_id = NULL
+    WHERE showtime_id = ?
+    AND seat_label = ?
+    AND status = 'reserved'
+    AND reserved_by_customer_id = ?
 ");
 $stmt->execute([$showtime_id, $seat_label, $customer_id]);
 

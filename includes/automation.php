@@ -1,32 +1,95 @@
 <?php
-require_once __DIR__ . '/../includes/config.php';
+/*
+|--------------------------------------------------------------------------
+| Ticketly Automation
+|--------------------------------------------------------------------------
+| Important:
+| Do NOT delete old showtimes.
+| Do NOT delete old bookings.
+| Do NOT delete old payments.
+|
+| Booking history should always remain visible to user and admin.
+|--------------------------------------------------------------------------
+*/
 
-/**
- * Automation script to remove past showtimes and their associated bookings
- * This leverages the ON DELETE CASCADE database constraints.
- */
-function cleanupPastShows($pdo) {
-    try {
-        // Find showtimes that are older than today
-        // We use CURDATE() to get today's date (at 00:00:00)
-        // If the show_date is less than today, it's a past show.
-        $stmt = $pdo->prepare("DELETE FROM showtimes WHERE show_date < CURDATE()");
-        $stmt->execute();
-        
-        $count = $stmt->rowCount();
-        return $count;
-    } catch (Exception $e) {
-        error_log("Cleanup error: " . $e->getMessage());
-        return false;
+require_once __DIR__ . '/config.php';
+
+date_default_timezone_set('Asia/Kathmandu');
+
+if (!function_exists('cleanupPastShows')) {
+    function cleanupPastShows(PDO $pdo)
+    {
+        try {
+            /*
+            |--------------------------------------------------------------------------
+            | Only release expired temporary seat reservations
+            |--------------------------------------------------------------------------
+            | This is safe.
+            | This does not remove confirmed bookings.
+            | This does not remove past showtimes.
+            */
+
+            $stmt = $pdo->prepare("
+                UPDATE seats
+                SET status = 'available',
+                    reserved_until = NULL,
+                    reserved_by_customer_id = NULL
+                WHERE status = 'reserved'
+                AND reserved_until IS NOT NULL
+                AND reserved_until < NOW()
+            ");
+            $stmt->execute();
+
+            return $stmt->rowCount();
+
+        } catch (Exception $e) {
+            error_log("Cleanup error: " . $e->getMessage());
+            return false;
+        }
     }
 }
 
-// If run directly via CLI or browser
-if (basename($_SERVER['PHP_SELF']) == 'cleanup_past_shows.php') {
-    $deleted = cleanupPastShows($pdo);
-    if ($deleted === false) {
-        echo "Error during cleanup.";
+if (!function_exists('ensureSeatsForShowtime')) {
+    function ensureSeatsForShowtime(PDO $pdo, int $showtime_id): void
+    {
+        $check = $pdo->prepare("
+            SELECT COUNT(*)
+            FROM seats
+            WHERE showtime_id = ?
+        ");
+        $check->execute([$showtime_id]);
+
+        if ($check->fetchColumn() > 0) {
+            return;
+        }
+
+        $rows = ['A', 'B', 'C', 'D'];
+
+        $insert = $pdo->prepare("
+            INSERT INTO seats (showtime_id, seat_label, status)
+            VALUES (?, ?, 'available')
+        ");
+
+        foreach ($rows as $row) {
+            for ($i = 1; $i <= 10; $i++) {
+                $insert->execute([$showtime_id, $row . $i]);
+            }
+        }
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
+| If this file is opened directly
+|--------------------------------------------------------------------------
+*/
+
+if (basename($_SERVER['PHP_SELF']) === 'automation.php') {
+    $released = cleanupPastShows($pdo);
+
+    if ($released === false) {
+        echo "Cleanup failed.";
     } else {
-        echo "Successfully removed $deleted past showtimes and all associated bookings/seats.";
+        echo "Cleanup completed. Expired temporary reservations released: " . intval($released);
     }
 }
